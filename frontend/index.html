@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Fengyue · 风月市场工作台</title>
+<meta name="description" content="纳斯达克 · 美股 ETF · 美元黄金指标 · 近实时全球市场监控工作台">
+<meta name="theme-color" content="#05070f">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
+<script>
+/* 首帧前还原主题, 避免闪烁 */
+(function(){try{var t=localStorage.getItem('gp-theme');if(t&&t!=='midnight')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();
+</script>
+<link rel="stylesheet" href="styles.css?v=18">
+</head>
+<body>
+  <!-- 氛围层: 极光星云 + 胶片颗粒 (纯装饰, 不拦截交互) -->
+  <div class="aurora" aria-hidden="true"><i class="a1"></i><i class="a2"></i><i class="a3"></i></div>
+  <div class="grain" aria-hidden="true"></div>
+
+  <div id="app">
+    <!-- 顶栏 -->
+    <header class="topbar">
+      <div class="brand" aria-label="Fengyue Assistant">
+        <span class="brand-sign" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7.2 7.2 0 0 0 21 12.8Z"/></svg>
+        </span>
+        <span class="brand-text">
+          <h1 class="brand-word">Fengyue</h1>
+          <p class="brand-sub">Assistant</p>
+        </span>
+      </div>
+      <div class="topbar-right">
+        <div class="clock" id="clock">--:--:--</div>
+        <div class="market-status" id="marketStatus"><span class="celestial" id="celestialIcon" aria-hidden="true"></span><span>加载中</span></div>
+        <div class="theme-wrap" id="themeWrap">
+          <button class="icon-btn" id="themeBtn" title="配色主题" aria-haspopup="true" aria-expanded="false">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18c-1.4 0-2-1.1-1.2-2.2.7-1 .2-2.3-1-2.6-.8-.2-1.8-.9-1.8-2.2 0-1.1.8-1.8 1.8-2 .9-.2 1.5-1.2 1.2-2.2C10.2 8.6 9.6 7.5 10.6 6.8 11 5.9 10.6 4.6 9.2 4 10 3.4 11 3 12 3Z"/></svg>
+          </button>
+          <div class="theme-pop" id="themePop" role="menu" aria-label="配色主题与动效" inert>
+            <button class="theme-opt motion-option" id="motionBtn" role="menuitem" aria-pressed="false">动效：跟随系统</button>
+            <p class="theme-pop-title">配色主题</p>
+            <button class="theme-opt" data-theme="midnight" role="menuitem"><span class="sw"><i style="background:#7c6cff"></i><i style="background:#22d3ee"></i><i style="background:#34d399"></i></span><b>午夜星河</b></button>
+            <button class="theme-opt" data-theme="ocean" role="menuitem"><span class="sw"><i style="background:#0a84ff"></i><i style="background:#64d2ff"></i><i style="background:#30d158"></i></span><b>深海蓝</b></button>
+            <button class="theme-opt" data-theme="titanium" role="menuitem"><span class="sw"><i style="background:#d6b27c"></i><i style="background:#9fa6b2"></i><i style="background:#30d158"></i></span><b>钛金</b></button>
+            <button class="theme-opt" data-theme="dusk" role="menuitem"><span class="sw"><i style="background:#f26d9c"></i><i style="background:#b07cff"></i><i style="background:#30d158"></i></span><b>暮色粉</b></button>
+            <button class="theme-opt" data-theme="light" role="menuitem"><span class="sw"><i style="background:#0071e3"></i><i style="background:#5e5ce6"></i><i style="background:#1d8f4f"></i></span><b>晨光</b></button>
+          </div>
+        </div>
+        <button class="icon-btn" id="cfgBtn" title="自选配置">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h13M20 18h1M14 4v4M10 10v4M17 16v4"/></svg>
+        </button>
+        <button class="icon-btn refresh" id="refreshBtn" title="刷新">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- 主区 -->
+    <main>
+      <!-- 阶段选择器 -->
+      <nav class="segmented" id="modeSwitch">
+        <i class="seg-pill" aria-hidden="true"></i>
+        <button class="seg active" data-mode="live"><span>盘中看板</span></button>
+        <button class="seg" data-mode="replay"><span>当日复盘</span></button>
+      </nav>
+
+      <!-- 沉浸式行情横幅 -->
+      <section class="hero-card glass" id="heroCard" data-mood="flat">
+        <div class="hero-glow"></div>
+        <div class="hero-row">
+          <div class="hero-title">
+            <p class="eyebrow">NAS100 · NASDAQ COMPOSITE</p>
+            <div class="hero-titlerow"><h2 id="heroIndex">--</h2><button class="hist-link" id="heroHist" title="查看历史走势">历史走势 <span class="chev">›</span></button></div>
+          </div>
+          <div class="hero-quote">
+            <div class="hero-price" id="heroPrice">--</div>
+            <div class="hero-change" id="heroChange">--</div>
+          </div>
+        </div>
+        <div class="hero-stats" id="heroStats">
+          <div class="hero-stat"><i>开盘</i><b id="hsOpen">--</b></div>
+          <div class="hero-stat"><i>最高</i><b id="hsHigh2">--</b></div>
+          <div class="hero-stat"><i>最低</i><b id="hsLow2">--</b></div>
+          <div class="hero-stat"><i>成交</i><b id="hsVol2">--</b></div>
+        </div>
+        <div class="sparkline" id="heroSpark"><canvas id="heroSparkCanvas"></canvas><i class="spark-pulse" id="sparkPulse" aria-hidden="true"></i></div>
+      </section>
+
+      <!-- 实时行情网格 -->
+      <div class="kpis" id="kpis"></div>
+
+      <!-- 板块标题 -->
+      <div class="section-head">
+        <h3>纳指与美股 ETF</h3>
+        <span class="section-sub" id="etfUpdateTime"></span>
+      </div>
+      <div class="stock-grid" id="stockGrid"></div>
+
+      <!-- A股板块 -->
+      <div class="section-head">
+        <h3>A 股自选</h3>
+        <span class="section-sub" id="aShareUpdateTime"></span>
+      </div>
+      <div class="stock-grid a-grid" id="aShareGrid"></div>
+
+      <!-- 基金板块 -->
+      <div class="section-head">
+        <h3>自选基金</h3>
+        <span class="section-sub" id="fundUpdateTime"></span>
+      </div>
+      <div class="stock-grid fund-grid" id="fundGrid"></div>
+
+      <!-- 指标卡 · 玻璃网格: 美债 / 美元 / 黄金 / 原油 / 股指期货 -->
+      <div class="section-head">
+        <h3>全球参考指标 · 美债 · 美元 · 黄金 · 原油 · 股指期货</h3>
+        <span class="section-sub" id="macroUpdateTime"></span>
+      </div>
+      <div class="macro-grid" id="macroGrid"></div>
+
+      <!-- 复盘视图 · 事件时间轴 -->
+      <section class="replay-view hidden" id="replayView">
+        <div class="replay-controls glass">
+          <span class="replay-label">复盘日期</span>
+          <input type="date" id="replayDate">
+          <button class="btn-accent" id="goReplay">加载复盘</button>
+        </div>
+        <div id="replayContent" class="replay-content">
+          <div class="timeline-rail"></div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footbar">
+      <span>数据：新浪 · 腾讯 · 近实时</span>
+      <span class="foot-sep">·</span>
+      <span>仅供参考，非投资建议</span>
+      <span class="live-badge" id="liveBadge">● LIVE</span>
+      <p class="signature">
+        <svg class="signature-sign" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3 7.2 7.2 0 0 0 21 12.8Z"/></svg>
+        Fengyue · 2026 · A quiet desk for restless markets
+      </p>
+    </footer>
+  </div>
+
+  <!-- 历史走势弹层 -->
+  <div class="sheet-mask hidden" id="histMask"></div>
+  <section class="hist-sheet hidden" id="histSheet" role="dialog" aria-modal="true" aria-labelledby="histName">
+    <div class="hist-header">
+      <div class="hist-id">
+        <p class="hist-eyebrow" id="histSymbol">--</p>
+        <h2 id="histName">--</h2>
+      </div>
+      <button class="hist-close" id="histClose" aria-label="关闭">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="hist-quote">
+      <div class="hist-price-row">
+        <span class="hist-price" id="histPrice">--</span>
+        <span class="hist-delta" id="histDelta">--</span>
+        <span class="hist-window" id="histWindow"></span>
+      </div>
+      <div class="hist-stats" id="histStats">
+        <span class="hs"><i>区间涨跌</i><b id="hsRangeChg">--</b></span>
+        <span class="hs"><i>区间最高</i><b id="hsHigh">--</b></span>
+        <span class="hs"><i>区间最低</i><b id="hsLow">--</b></span>
+        <span class="hs"><i>区间振幅</i><b id="hsAmp">--</b></span>
+        <span class="hs"><i>日均成交</i><b id="hsVol">--</b></span>
+      </div>
+    </div>
+    <div class="hist-toolbar">
+      <nav class="hist-ranges" id="histRanges">
+        <button class="hr" data-range="1W">1周</button>
+        <button class="hr" data-range="1M">1月</button>
+        <button class="hr active" data-range="3M">3月</button>
+        <button class="hr" data-range="6M">6月</button>
+        <button class="hr" data-range="1Y">1年</button>
+        <button class="hr" data-range="2Y">2年</button>
+        <button class="hr" data-range="ALL">全部</button>
+      </nav>
+      <div class="chart-modes" id="chartModes">
+        <button class="cm active" data-mode="area" title="线图 / 面积图">线图</button>
+        <button class="cm" data-mode="candle" title="K线（蜡烛图）">K线</button>
+      </div>
+    </div>
+    <div class="hist-chart" id="histChart">
+      <canvas id="histCanvas"></canvas>
+      <div class="cross-h" id="crossH" aria-hidden="true"></div>
+      <div class="cross-v" id="crossV" aria-hidden="true"></div>
+      <div class="sel-wrap" id="selWrap" style="display:none"><span class="sel-badge" id="selBadge"></span></div>
+      <div class="hist-tip" id="histTip"></div>
+      <div class="hist-hint" id="histHint">↔ 拖拽可框选区间，查看区间涨跌</div>
+      <div class="hist-empty" id="histEmpty">
+        <div class="hist-empty-ic">📈</div>
+        <p>该指标暂未开通历史走势</p>
+        <span>当前价格与实时涨跌仍可参考看板</span>
+      </div>
+      <div class="hist-loading" id="histLoading"><span></span></div>
+    </div>
+    <p class="hist-note" id="histNote"></p>
+  </section>
+
+  <!-- 自选配置弹层 · 工作台式 -->
+  <div class="sheet-mask hidden" id="cfgMask"></div>
+  <section class="cfg-sheet hidden" id="cfgSheet" role="dialog" aria-modal="true" aria-label="看板工作台">
+    <div class="cfg-header">
+      <div class="cfg-id">
+        <p class="cfg-eyebrow">WATCHLIST · 自选配置</p>
+        <h2>看板工作台</h2>
+      </div>
+      <button class="cfg-close" id="cfgClose" aria-label="关闭">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="cfg-body">
+      <!-- 左侧分组导航 -->
+      <nav class="cfg-nav" id="cfgNav">
+        <button class="cfg-nav-item active" data-tab="hero"><span class="ni-dot"></span>主指数</button>
+        <button class="cfg-nav-item" data-tab="etfs"><span class="ni-dot"></span>美股 ETF</button>
+        <button class="cfg-nav-item" data-tab="index"><span class="ni-dot"></span>纳指 / 指数</button>
+        <button class="cfg-nav-item" data-tab="ashares"><span class="ni-dot"></span>A 股</button>
+        <button class="cfg-nav-item" data-tab="funds"><span class="ni-dot"></span>基金</button>
+        <button class="cfg-nav-item" data-tab="macro"><span class="ni-dot"></span>美元 / 黄金</button>
+      </nav>
+      <!-- 右侧分组详情 -->
+      <div class="cfg-pane">
+        <div class="cfg-pane-section active" data-pane="hero">
+          <div class="pane-head">
+            <h3>主指数 · Hero</h3>
+            <span class="g-sub">在下方指数中选择一个作为 Hero 主指数</span>
+          </div>
+          <div class="cfg-chips" id="cfgHero"></div>
+        </div>
+
+        <div class="cfg-pane-section" data-pane="etfs">
+          <div class="pane-head">
+            <h3>美股 / ETF</h3>
+            <span class="g-sub">点击 ✕ 删除，可新增代码</span>
+          </div>
+          <div class="cfg-add">
+            <input id="cfgAddEtfs" placeholder="美股代码，如 MSFT / AMD / VOO" autocomplete="off">
+            <button data-sec="etfs">添加</button>
+            <div class="search-suggest" data-input="cfgAddEtfs" data-sec="etfs"></div>
+          </div>
+          <div class="cfg-list" id="cfgEtfs"></div>
+        </div>
+
+        <div class="cfg-pane-section" data-pane="index">
+          <div class="pane-head">
+            <h3>纳指 / 主要指数</h3>
+            <span class="g-sub">点击 ✕ 删除，可新增代码</span>
+          </div>
+          <div class="cfg-add">
+            <input id="cfgAddIndex" placeholder="指数代码，如 IXIC / NDX / DJI" autocomplete="off">
+            <button data-sec="index">添加</button>
+            <div class="search-suggest" data-input="cfgAddIndex" data-sec="index"></div>
+          </div>
+          <div class="cfg-list" id="cfgIndex"></div>
+        </div>
+
+        <div class="cfg-pane-section" data-pane="ashares">
+          <div class="pane-head">
+            <h3>A 股自选</h3>
+            <span class="g-sub">支持代码如 SZ300088 / SH600519，可直接搜名称</span>
+          </div>
+          <div class="cfg-add">
+            <input id="cfgAddAshares" placeholder="代码或名称，如 长信科技 / SZ300088 / 茅台" autocomplete="off">
+            <button data-sec="ashares">添加</button>
+            <div class="search-suggest" data-input="cfgAddAshares" data-sec="ashares"></div>
+          </div>
+          <div class="cfg-list" id="cfgAshares"></div>
+        </div>
+
+        <div class="cfg-pane-section" data-pane="funds">
+          <div class="pane-head">
+            <h3>自选基金</h3>
+            <span class="g-sub">支持 6 位基金代码，如 018147 / 005827，可直接搜名称</span>
+          </div>
+          <div class="cfg-add">
+            <input id="cfgAddFunds" placeholder="代码或名称，如 建信 / 018147 / 易方达" autocomplete="off">
+            <button data-sec="funds">添加</button>
+            <div class="search-suggest" data-input="cfgAddFunds" data-sec="funds"></div>
+          </div>
+          <div class="cfg-list" id="cfgFunds"></div>
+        </div>
+
+        <div class="cfg-pane-section" data-pane="macro">
+          <div class="pane-head">
+            <h3>参考指标 · 美债 / 美元 / 商品 / 股指期货</h3>
+            <span class="g-sub">东财 · 金投 · 新浪</span>
+          </div>
+          <div class="cfg-add">
+            <input id="cfgAddBonds" placeholder="美债收益率：US10Y / US30Y，或搜「美债」" autocomplete="off">
+            <button data-sec="bonds">添加</button>
+            <div class="search-suggest" data-input="cfgAddBonds" data-sec="bonds"></div>
+          </div>
+          <div class="cfg-add">
+            <input id="cfgAddFutures" placeholder="期货码：GC SI CL NQ …" autocomplete="off">
+            <button data-sec="futures">添加</button>
+            <div class="search-suggest" data-input="cfgAddFutures" data-sec="futures"></div>
+          </div>
+          <div class="cfg-add">
+            <input id="cfgAddFx" placeholder="外汇/指数码：DINIW …" autocomplete="off">
+            <button data-sec="fx">添加</button>
+            <div class="search-suggest" data-input="cfgAddFx" data-sec="fx"></div>
+          </div>
+          <div class="cfg-list" id="cfgMacro"></div>
+        </div>
+      </div>
+    </div>
+    <p class="cfg-note">改动即时保存到服务端并刷新看板，手机 / Windows / Mac 打开同址即同步。删除即从看板隐藏，可随时重新添加。</p>
+  </section>
+
+  <template id="kpiTpl">
+    <div class="kpi-card glass">
+      <div class="kpi-top">
+        <span class="kpi-name"></span>
+        <span class="kpi-tag"></span>
+      </div>
+      <div class="kpi-val"></div>
+      <div class="kpi-delta"></div>
+    </div>
+  </template>
+
+  <template id="stockTpl">
+    <div class="stock-card glass" data-symbol="" data-sec="">
+      <div class="stock-head">
+        <span class="stock-name"></span>
+        <span class="stock-id">
+          <i class="stock-badge"></i>
+          <em class="stock-symbol"></em>
+        </span>
+      </div>
+      <div class="stock-price"></div>
+      <div class="stock-meta">
+        <span class="stock-change"></span>
+        <span class="stock-vol"></span>
+      </div>
+      <div class="stock-chart">
+        <canvas class="mini-kline"></canvas>
+        <div class="mini-bar"></div>
+      </div>
+    </div>
+  </template>
+
+  <template id="macroTpl">
+    <div class="macro-card glass" data-symbol="">
+      <div class="mc-head">
+        <div class="mc-icon-wrap"><span class="mc-icon"></span></div>
+        <div class="mc-meta">
+          <span class="mc-name"></span>
+          <span class="mc-symbol"></span>
+        </div>
+      </div>
+      <div class="mc-price"></div>
+      <div class="mc-bottom">
+        <span class="mc-delta"></span>
+        <canvas class="mc-spark" width="80" height="32"></canvas>
+      </div>
+    </div>
+  </template>
+
+  <script src="app.js?v=16"></script>
+</body>
+</html>

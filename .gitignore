@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# 自选配置为运行时数据, 不随源码提交
+data/watchlist.json

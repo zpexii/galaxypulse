@@ -1,0 +1,15 @@
+{
+  "name": "Fengyue + Nasdaq Assistant",
+  "short_name": "Fengyue",
+  "description": "纳斯达克 · 美股ETF · 美元黄金指标 · 近实时全球市场监控",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#05070f",
+  "theme_color": "#05070f",
+  "orientation": "portrait",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
