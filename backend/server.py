@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import time
+import itertools
 import threading
 import concurrent.futures
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -185,42 +186,28 @@ def _em_json(url, timeout=6):
 
 def em_bond_quote(sym):
     """美国国债收益率 (东方财富行情中心 171.US10Y/US30Y):
-    走延迟行情主机 push2delay (限流宽松), 失败回退 push2his;
-    返回收益率百分数 + 基点变动; 失败返回 None"""
-    secid = BOND_SECIDS.get(sym)
-    if not secid:
+    走 push2his 日K —— 取最后两根, 最新收益率 + 相对前收的基点变动。
+    (东财的 trends2 日内序列对美债恒为一条直线, 与日K收盘价同值, 故直接用日K)。
+    经 kline 缓存: 东财对同一 IP 限流极紧, 缓存兼作限流与失败回退;
+    失败返回 None"""
+    data = kline_cached(sym, 'bonds', 3)
+    bars = ((data or {}).get('bars') or [])
+    if not bars:
         return None
-    qs = (f"secid={secid}&fields1=f1,f2,f3,f8&fields2=f51,f53&ndays=1&iscr=0"
-          "&ut=fa5fd1943c7b386f172d6893dbfba10b")
-    data = None
-    for host in ('push2delay.eastmoney.com', 'push2his.eastmoney.com'):
-        try:
-            j = _em_json(f"https://{host}/api/qt/stock/trends2/get?{qs}")
-            data = (j or {}).get('data')
-            if data and data.get('trends'):
-                break
-        except Exception:
-            data = None
-        time.sleep(0.4)
-    if not data or not data.get('trends'):
+    last = bars[-1]
+    pre = float(bars[-2]['c']) if len(bars) >= 2 else float(last['o'])
+    if not pre:
         return None
-    try:
-        last_t, last_v = data['trends'][-1].split(',')
-        price = round(float(last_v), 4)
-        pre = data.get('preClose')
-        if pre in (None, 0):
-            pre = float(data['trends'][0].split(',')[1])
-        chg = round(price - pre, 4)
-        bp = round((price - pre) * 100, 1)          # 1 个百分点 = 100 BP
-        return {
-            'symbol': sym, 'name': NAMES.get(sym, sym),
-            'price': price, 'change': chg,
-            'changePct': round((price - pre) / pre * 100, 2) if pre else 0,
-            'bp': bp, 'unit': '%', 'decimals': 2,
-            'time': last_t.split(' ')[-1], 'sec': 'bonds',
-        }
-    except (ValueError, IndexError, TypeError):
-        return None
+    price = float(last['c'])
+    chg = price - pre
+    return {
+        'symbol': sym, 'name': NAMES.get(sym, sym),
+        'price': round(price, 4), 'change': round(chg, 4),
+        'changePct': round(chg / pre * 100, 2),
+        'bp': round(chg * 100, 1),                  # 1 个百分点 = 100 BP
+        'unit': '%', 'decimals': 2,
+        'time': last['d'], 'sec': 'bonds',
+    }
 
 def cngold_gold_quote():
     """COMEX 黄金备份源: 金投网行情 (api.jijinhao.com), 代码 JO_12552。
@@ -703,7 +690,30 @@ def _spark_cached(symbol):
 #   fx      外汇: 免费日K源不稳定, 不提供 (返回空, 前端不造假数据)
 _KLINE_CACHE = {}
 _KLINE_TTL = 1800.0
+# 无数据可回退时的熔断窗口: /api/live 每 6s 一次, 上游限流时若不加节流会越打越死
+_KLINE_FAIL_TTL = 60.0
 _kline_lock = threading.Lock()
+
+# 东财行情节点: 裸域名常被负载均衡落到某台限流节点(直接空响应), 编号域名指向别的节点。
+# 限流是按节点而非按 IP —— 哪台被限随时在变, 所以多备几台并让连续请求错开起点
+_EM_KLINE_HOSTS = ('2.push2his.eastmoney.com', '44.push2his.eastmoney.com',
+                   '1.push2his.eastmoney.com', '23.push2his.eastmoney.com',
+                   'push2his.eastmoney.com')
+_em_host_rr = itertools.count()
+
+def _em_kline_text(qs):
+    """东财 kline/get: 逐台轮询, 连续调用错开起点(避免两次请求都先撞同一台限流节点)"""
+    n = len(_EM_KLINE_HOSTS)
+    start = next(_em_host_rr) % n
+    txt = ''
+    for i in range(n):
+        host = _EM_KLINE_HOSTS[(start + i) % n]
+        txt = _kline_get_text(f"https://{host}/api/qt/stock/kline/get?{qs}",
+                              headers={"Referer": "https://quote.eastmoney.com/",
+                                       "User-Agent": UA})
+        if txt and txt.strip().startswith('{'):
+            return txt
+    return txt
 
 def _kline_get_text(url, headers=None):
     """K线类接口偶发空响应/瞬时限流: 失败间隔重试一次"""
@@ -767,12 +777,9 @@ def _em_day_kline(symbol, n):
     klines 行格式: 日期,开,收,高,低,成交量,成交额; 时间正序。"""
     code = re.sub(r'\D', '', symbol)
     mkt = '1' if symbol.upper().startswith('SH') else '0'
-    url = ("https://push2his.eastmoney.com/api/qt/stock/kline/get"
-           f"?secid={mkt}.{code}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56"
-           f"&klt=101&fqt=1&end=20500101&lmt={max(n, 60)}")
-    txt = _kline_get_text(url, headers={"Referer": "https://quote.eastmoney.com/",
-                                        "User-Agent": UA})
-    rows = ((json.loads(txt).get('data') or {}).get('klines') or [])
+    qs = (f"secid={mkt}.{code}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56"
+          f"&klt=101&fqt=1&end=20500101&lmt={max(n, 60)}")
+    rows = ((json.loads(_em_kline_text(qs)).get('data') or {}).get('klines') or [])
     bars = []
     for row in rows[len(rows) - n:]:
         p = row.split(',')
@@ -781,6 +788,32 @@ def _em_day_kline(symbol, n):
         try:
             bars.append({'d': p[0], 'o': float(p[1]), 'c': float(p[2]),
                          'h': float(p[3]), 'l': float(p[4]), 'v': float(p[5])})
+        except ValueError:
+            continue
+    return bars
+
+def _em_bond_kline(sym, n=3):
+    """美债收益率日K (东方财富行情中心 171.US10Y/US30Y):
+    klines 行格式 日期,开,收,高,低,量; 时间正序, 收益率单位为百分数"""
+    secid = BOND_SECIDS.get(sym.upper())
+    if not secid:
+        return []
+    qs = (f"secid={secid}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56"
+          f"&klt=101&fqt=0&end=20500101&lmt={max(n, 3)}")
+    txt = _em_kline_text(qs)
+    try:
+        rows = ((json.loads(txt).get('data') or {}).get('klines') or [])
+    except (ValueError, AttributeError):
+        return []
+    bars = []
+    for row in rows:
+        p = row.split(',')
+        if len(p) < 5:
+            continue
+        try:
+            bars.append({'d': p[0], 'o': float(p[1]), 'c': float(p[2]),
+                         'h': float(p[3]), 'l': float(p[4]),
+                         'v': float(p[5]) if len(p) > 5 else 0.0})
         except ValueError:
             continue
     return bars
@@ -821,8 +854,12 @@ def fetch_kline(symbol, sec, n=30):
         return 'candles', _tx_day_kline('us.' + symbol, n, fq=False)
     if sec == 'futures':
         return 'candles', _sina_future_kline(symbol, n)
-    if sec in ('bonds', 'fx'):
-        # 美债收益率/外汇: 免费源仅有实时(东财trends2/新浪), 无稳定日K, 返回空 → 前端留白不造假
+    if sec == 'bonds':
+        # 美债收益率: 东财日K (171.US10Y/US30Y)。
+        # 只按需要根数取 —— 东财限流下响应会随数据量线性变慢, 取满反而拖垮 /api/live
+        return 'candles', _em_bond_kline(symbol, n)
+    if sec == 'fx':
+        # 外汇: 免费源仅有实时(新浪境外指数), 无稳定日K, 返回空 → 前端留白不造假
         return 'line', []
     # etfs / 美股: 纳斯达克 .OQ 优先, 空数据再试纽交所 .N
     bars = _tx_day_kline(f'us{symbol}.OQ', n)
@@ -836,7 +873,7 @@ def kline_cached(symbol, sec, n=30):
     now = time.time()
     with _kline_lock:
         old = _KLINE_CACHE.get(key)
-        if old and now - old['at'] < _KLINE_TTL:
+        if old and now - old['at'] < (_KLINE_TTL if old['data'] else _KLINE_FAIL_TTL):
             return old['data']
     try:
         typ, bars = fetch_kline(symbol, sec, n)
@@ -847,7 +884,11 @@ def kline_cached(symbol, sec, n=30):
         with _kline_lock:
             _KLINE_CACHE[key] = {'at': now, 'data': data}
         return data
-    return old['data'] if old else None
+    if old and old['data']:
+        return old['data']            # 有旧数据就继续用, 时间戳不刷新, 到期后自然重试
+    with _kline_lock:
+        _KLINE_CACHE[key] = {'at': now, 'data': None}   # 无旧数据: 进熔断窗口
+    return None
 
 def _resolve_quote(symbol, kind, dropped=None):
     """按类型解析单个标的最新行情: kind=stock/index/fx/futures; 失败返回 None
@@ -916,24 +957,28 @@ def fetch_all(wl=None):
     # 期货备份源: 新浪 hf_ (NQ 仅新浪有), 金投黄金, 东财 GC/CL
     if hf_syms:   jobs['sina_hf'] = lambda: sina_get(','.join('hf_' + x for x in hf_syms))
     if 'GC' in hf_syms: jobs['cngold_gc'] = cngold_gold_quote
-    for s in bond_syms:
-        jobs['em_bond_' + s] = lambda s=s: em_bond_quote(s)
+    # 美债走同一个东财节点, 并发请求会被判为限流而齐齐失败 → 串行取
+    if bond_syms:
+        jobs['em_bonds'] = lambda: {s: em_bond_quote(s) for s in bond_syms}
     jobs['spark'] = lambda: _spark_cached('QQQ')
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
-        futs = {k: ex.submit(fn) for k, fn in jobs.items()}
-        def safe_get(k, dv=''):
-            try: return futs[k].result(timeout=6)
-            except Exception: return dv
-        sina_us_txt = safe_get('sina_us')
-        tx_index_txt = safe_get('tx_index')
-        sina_a_txt = safe_get('sina_a')
-        sina_idx_txt = safe_get('sina_idx')
-        tx_hf_txt = safe_get('tx_hf')
-        sina_hf_txt = safe_get('sina_hf') if hf_syms else ''
-        cngold_gc = safe_get('cngold_gc', None) if 'GC' in hf_syms else None
-        bonds_map = {s: safe_get('em_bond_' + s, None) for s in bond_syms}
-        spark = safe_get('spark', [])
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+    futs = {k: ex.submit(fn) for k, fn in jobs.items()}
+    def safe_get(k, dv=''):
+        try: return futs[k].result(timeout=6)
+        except Exception: return dv
+    sina_us_txt = safe_get('sina_us')
+    tx_index_txt = safe_get('tx_index')
+    sina_a_txt = safe_get('sina_a')
+    sina_idx_txt = safe_get('sina_idx')
+    tx_hf_txt = safe_get('tx_hf')
+    sina_hf_txt = safe_get('sina_hf') if hf_syms else ''
+    cngold_gc = safe_get('cngold_gc', None) if 'GC' in hf_syms else None
+    bonds_map = safe_get('em_bonds', None) or {s: None for s in bond_syms}
+    spark = safe_get('spark', [])
+    # 不等超时任务收尾(典型是被东财节点限流的美债): 它跑完会自行写入缓存,
+    # 下一轮 /api/live 直接命中 —— 否则单个上游能把整个响应拖到十几秒
+    ex.shutdown(wait=False)
 
     dropped_us = {}
     sina_us = parse_sina_us(sina_us_txt, dropped_us)

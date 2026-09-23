@@ -1130,7 +1130,8 @@ function drawHistFrame(d, prog=1, view){
   const col = up? P.up : P.down;
   const colSoft = a => rgbaRGB(up ? P.upRGB : P.downRGB, a);
   const dec = histDec(d.lastClose);
-  const k = Math.max(2, Math.floor(n*prog));
+  // 收尾帧 k 必须夹在 n 以内: 数据只有 1 根时 max(2,…) 会越界读 undefined
+  const k = Math.min(n, Math.max(2, Math.floor(n*prog)));
 
   g.clearRect(0,0,W,H);
   g.font = '10.5px -apple-system, PingFang SC, sans-serif';
@@ -1239,7 +1240,7 @@ function drawArea(g, d, k, xAt, yAt, W, H, pd, col, colSoft, dec, prog){
 
 function drawCandles(g, d, k, xAt, yAt, W, H, pd){
   const plotW = (W - pd.padL - pd.padR);
-  const bw = Math.max(1.5, plotW/k*0.62);
+  const bw = Math.max(1.5, Math.min(26, plotW/k*0.62));   // 上限避免极短数据画出巨型蜡烛
   const half = bw/2;
   for(let i=0;i<k;i++){
     const b = d.bars[i];
