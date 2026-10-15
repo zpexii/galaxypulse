@@ -18,11 +18,8 @@
   },
   "homepage": "https://github.com/zpexii/galaxypulse#readme",
   "dependencies": {
-    "@capacitor-community/http": "^1.4.1",
     "@capacitor/android": "^8.5.3",
     "@capacitor/cli": "^8.5.3",
-    "@capacitor/core": "^8.5.3",
-    "@capacitor/local-notifications": "^8.3.1",
-    "@capacitor/preferences": "^8.0.1"
+    "@capacitor/core": "^8.5.3"
   }
 }

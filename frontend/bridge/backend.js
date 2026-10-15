@@ -33,6 +33,17 @@
     const hdrs = Object.assign({ 'User-Agent': UA }, headers);
 
     // Capacitor 原生 HTTP (Android/iOS) — 零 CORS 限制
+    // 用官方内置的 CapacitorHttp (Capacitor 5+ 自带, 无需 @capacitor-community/http 插件)
+    if (globalThis.CapacitorHttp && typeof globalThis.CapacitorHttp.get === 'function') {
+      try {
+        // responseType: 'text' 直接返回字符串
+        const { data } = await globalThis.CapacitorHttp.get({
+          url, headers: hdrs, responseType: 'text'
+        });
+        return typeof data === 'string' ? data : '';
+      } catch(e) { /* fallthrough */ }
+    }
+    // 兼容旧版 community/http 插件
     if (globalThis.Capacitor && globalThis.Capacitor.Plugins && globalThis.Capacitor.Plugins.Http) {
       try {
         const { value } = await globalThis.Capacitor.Plugins.Http.get({ url, headers: hdrs });
