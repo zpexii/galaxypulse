@@ -3,26 +3,40 @@ const API = '/api';
 const motionQuery = matchMedia('(prefers-reduced-motion: reduce)');
 let motionPreference = 'system';
 try{ motionPreference = localStorage.getItem('gp-motion') || 'system'; }catch(e){}
-function reducedMotion(){ return motionPreference === 'reduce' || motionQuery.matches; }
+// 移动端默认开启简化动效 (性能优先), 但保留用户手动切换权限
+const autoReduceMotion = matchMedia('(max-width: 768px)').matches;
+function reducedMotion(){
+  if(motionPreference === 'reduce') return true;
+  if(motionPreference === 'system') return motionQuery.matches || autoReduceMotion;
+  return false; // 'full'
+}
 function syncMotion(){
   document.documentElement.classList.toggle('reduce-motion', reducedMotion());
   const button = document.getElementById('motionBtn');
-  if(button){ button.textContent = motionPreference === 'reduce' ? '动效：简化' : '动效：跟随系统'; button.setAttribute('aria-pressed', String(motionPreference === 'reduce')); }
+  if(button){
+    button.textContent = reducedMotion() ? '动效：简化' : '动效：常规';
+    button.setAttribute('aria-pressed', String(reducedMotion()));
+  }
   document.getElementById('heroCard')?.style.removeProperty('transform');
   document.querySelector('.hero-glow')?.style.removeProperty('transform');
 }
 motionQuery.addEventListener('change', syncMotion);
 syncMotion();
 document.getElementById('motionBtn')?.addEventListener('click', ()=>{
-  motionPreference = motionPreference === 'reduce' ? 'system' : 'reduce';
+  const isNow = reducedMotion();
+  motionPreference = isNow ? 'full' : 'reduce';
   try{ localStorage.setItem('gp-motion', motionPreference); }catch(e){}
   syncMotion();
 });
 
 let activeDialog = null;
+let pollingPausedByDialog = false;
 function enterDialog(sheet, close, trigger = document.activeElement){
   activeDialog = {sheet, close, trigger};
   document.getElementById('app').inert = true;
+  document.body.classList.add('sheet-open');
+  // 弹层打开 → 暂停轮询, 避免与弹层内交互抢主线程
+  if(state.polling){ stopPolling(); pollingPausedByDialog = true; }
   sheet.tabIndex = -1;
   (sheet.querySelector('button') || sheet).focus({preventScroll:true});
 }
@@ -32,6 +46,8 @@ function leaveDialog(sheet){
   activeDialog = null;
   document.getElementById('app').inert = false;
   document.body.classList.remove('sheet-open');
+  // 弹层关闭 → 恢复轮询
+  if(pollingPausedByDialog){ pollingPausedByDialog = false; startPolling(); }
   const target = trigger?.isConnected ? trigger : document.getElementById('refreshBtn');
   target?.focus({preventScroll:true});
 }
@@ -502,11 +518,14 @@ function drawMiniArea(canvas, points, up){
   const rect = canvas.getBoundingClientRect();
   const W = rect.width || parseInt(canvas.getAttribute('width')) || 80;
   const H = rect.height || parseInt(canvas.getAttribute('height')) || 32;
-  const cw = Math.round(W * dpr), ch = Math.round(H * dpr);
-  if(canvas.width !== cw) canvas.width = cw;
-  if(canvas.height !== ch) canvas.height = ch;
-  if(!rect.width) canvas.style.width = W+'px';
-  if(!rect.height) canvas.style.height = H+'px';
+  // 缓存: 只在尺寸变化时 resize
+  if(canvas._cachedW !== W || canvas._cachedH !== H || canvas._cachedDpr !== dpr){
+    canvas.width  = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    if(!rect.width)  canvas.style.width  = W+'px';
+    if(!rect.height) canvas.style.height = H+'px';
+    canvas._cachedW = W; canvas._cachedH = H; canvas._cachedDpr = dpr;
+  }
   const g = canvas.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, W, H);
@@ -632,10 +651,13 @@ function setupMiniCanvas(canvas){
   const rect = canvas.getBoundingClientRect();
   const W = rect.width  || parseInt(canvas.getAttribute('width'))  || 200;
   const H = rect.height || parseInt(canvas.getAttribute('height')) || 46;
-  const cw = Math.round(W*dpr), ch = Math.round(H*dpr);
-  if(canvas.width !== cw) canvas.width = cw;
-  if(canvas.height !== ch) canvas.height = ch;
-  canvas.style.width = W+'px'; canvas.style.height = H+'px';
+  // 缓存: 只在尺寸变化时 resize
+  if(canvas._cachedW !== W || canvas._cachedH !== H || canvas._cachedDpr !== dpr){
+    canvas.width  = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    canvas.style.width = W+'px'; canvas.style.height = H+'px';
+    canvas._cachedW = W; canvas._cachedH = H; canvas._cachedDpr = dpr;
+  }
   const g = canvas.getContext('2d');
   g.setTransform(dpr,0,0,dpr,0,0);
   return {g,W,H};
@@ -781,9 +803,13 @@ function drawSpark(points, el0){
   const dpr=window.devicePixelRatio||1;
   const rect=c.parentElement.getBoundingClientRect();
   const W=rect.width, H=rect.height;
-  c.width=W*dpr; c.height=H*dpr;
-  c.style.width=W+'px'; c.style.height=H+'px';
-  const g=c.getContext('2d'); g.scale(dpr,dpr);
+  // 缓存: 只在尺寸变化时 resize
+  if(c._cachedW !== W || c._cachedH !== H || c._cachedDpr !== dpr){
+    c.width = Math.round(W*dpr); c.height = Math.round(H*dpr);
+    c.style.width=W+'px'; c.style.height=H+'px';
+    c._cachedW = W; c._cachedH = H; c._cachedDpr = dpr;
+  }
+  const g=c.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0);
   g.clearRect(0,0,W,H);
   if(!points||points.length<2){ if(pulse) pulse.classList.remove('on'); return; }
   let mn=Math.min(...points), mx=Math.max(...points), rg=(mx-mn)||1;
@@ -893,6 +919,9 @@ function renderAll(q){
 async function fetchLive(){
   const btn=el.refreshBtn;
   if(btn.getAttribute('aria-busy') === 'true') return;
+  // 页面隐藏 / 弹层打开时不打扰用户 —— 等回到主视图再刷新
+  if(document.hidden) return;
+  if(activeDialog) return;
   btn.setAttribute('aria-busy', 'true');
   btn.setAttribute('aria-label', '正在刷新行情');
   btn.classList.add('spinning');
@@ -913,11 +942,22 @@ async function fetchLive(){
 
 function startPolling(){
   stopPolling();
-  if(document.hidden || state.mode !== 'live') return;
-  state.polling=setInterval(fetchLive, 60000); // 每60秒
+  if(state.mode !== 'live') return;
+  // 页面不可见/弹层打开时延后启动
+  if(!document.hidden && !activeDialog){
+    state.polling=setInterval(fetchLive, 60000);
+  }
 }
 
 function stopPolling(){ if(state.polling){ clearInterval(state.polling); state.polling=null; } }
+
+// 页面从后台切回时立即补一次行情, 并恢复轮询
+document.addEventListener('visibilitychange', ()=>{
+  if(!document.hidden && state.mode==='live'){
+    startPolling();
+    if(!state.polling) fetchLive();  // 补一次
+  }
+});
 
 // ---------- 复盘 ----------
 async function loadReplay(){
@@ -1151,13 +1191,21 @@ function histPad(){
 }
 const histDec = (v)=> v==null?2 : (v>=100?2 : (v>=10?3:4));
 function setupCanvas(c){
+  if(!c || !c.parentElement) return {g: null, W: 0, H: 0};
   const dpr = window.devicePixelRatio||1;
   const rect = c.parentElement.getBoundingClientRect();
   const W = rect.width || c.clientWidth || 600;
   const H = (rect.height || 320);
-  if(c.width !== W*dpr || c.height !== H*dpr){ c.width = W*dpr; c.height = H*dpr; }
-  c.style.width = W+'px'; c.style.height = H+'px';
-  const g = c.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0);
+  // 缓存: 只在尺寸真的变化时才 resize canvas (避免每帧 GPU 纹理重传)
+  if(c._cachedW !== W || c._cachedH !== H || c._cachedDpr !== dpr){
+    c.width  = Math.round(W*dpr);
+    c.height = Math.round(H*dpr);
+    c.style.width  = W+'px';
+    c.style.height = H+'px';
+    c._cachedW = W; c._cachedH = H; c._cachedDpr = dpr;
+  }
+  const g = c.getContext('2d');
+  g.setTransform(dpr,0,0,dpr,0,0);
   return {g, W, H};
 }
 function histAnchors(bars, W, H){

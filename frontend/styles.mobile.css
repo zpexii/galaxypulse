@@ -39,10 +39,9 @@ main { padding-top: 10px; }
   position: sticky;
   top: 0;
   z-index: 60;
-  background: rgba(var(--bg-rgb, 5, 7, 15), 0.72);
-  -webkit-backdrop-filter: blur(22px) saturate(1.7);
-  backdrop-filter: blur(22px) saturate(1.7);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  /* 移动端用高不透明纯底替代 backdrop-filter: blur() —— 后者在 3x DPR WebView 滚动时每帧 GPU 合成 */
+  background: var(--bg);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .brand { gap: 8px; min-width: 0; flex: 0 1 auto; }
@@ -88,9 +87,7 @@ main { padding-top: 10px; }
   left: auto;
   width: min(264px, calc(100vw - 24px));
   transform-origin: top right;
-  background: rgba(14, 18, 32, 0.94) !important;
-  -webkit-backdrop-filter: blur(30px) saturate(1.7);
-  backdrop-filter: blur(30px) saturate(1.7);
+  background: var(--bg2) !important;
   border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
   padding: 10px;
@@ -113,10 +110,9 @@ main { padding-top: 10px; }
   border-radius: 999px;
   padding: 5px !important;
   gap: 2px;
-  background: rgba(20, 24, 38, 0.82);
-  -webkit-backdrop-filter: blur(26px) saturate(1.8);
-  backdrop-filter: blur(26px) saturate(1.8);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  background: var(--bg2);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   display: flex;
 }
 .segmented .seg {
@@ -370,9 +366,7 @@ main { padding-top: 10px; }
   bottom: 10px; left: 10px;
   padding: 5px 9px;
   border-radius: 8px;
-  background: rgba(10, 13, 24, 0.62);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
+  background: rgba(10, 13, 24, 0.92);
 }
 /* 手机端十字提示卡: 贴顶部, 防溢出 */
 .hist-tip {
@@ -495,8 +489,49 @@ main { padding-top: 10px; }
 .kpi-card:hover, .stock-card:hover, .macro-card:hover { transform: none; box-shadow: none; }
 
 /* ================= 极光 / 颗粒 降性能 ================= */
-.aurora i { animation-duration: 26s; }
-.grain { opacity: 0.05; }
+.aurora, .grain, body::before { display: none !important; }
+
+/* ================= 移动端性能攻坚: 砍掉 body 固定渐变 + hero-card 重特效 ================= */
+body {
+  /* 移动端去掉 background-attachment: fixed —— 这个每帧重新采样整个渐变层 */
+  background-attachment: scroll !important;
+  background-image: none !important;       /* 径向渐变省了, 纯色底足够 */
+}
+.hero-card::before { display: none !important; }  /* 细密网格层 + mask-image —— 移动端砍掉 */
+.hero-card::after  { display: none !important; }  /* conic-gradient 光束描边 */
+.hero-card { isolation: auto !important; transform-style: flat !important; }
+
+/* ================= 卡片网格 GPU 隔离 + content-visibility ================= */
+.stock-grid > *, .macro-grid > *, .kpis > * {
+  contain: layout paint;
+}
+.stock-card, .macro-card, .kpi-card {
+  content-visibility: auto;
+  contain-intrinsic-size: 200px;
+}
+
+/* ================= 弹层遮罩 / sheet —— 砍掉 backdrop-filter ================= */
+.sheet-mask {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  background: rgba(0,0,0,0.55);
+}
+.hist-sheet, .cfg-sheet {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  background: var(--bg2) !important;
+}
+
+/* ================= 移动端禁用入场 stagger 动画 —— 与滚动合成器竞争 ================= */
+.topbar, .segmented, .hero-card, .kpis, .section-head,
+.stock-grid, .macro-grid, .footbar, .macro-rail-wrap,
+.hist-toolbar, .hist-ranges, .chart-modes {
+  animation: none !important;
+  animation-delay: 0ms !important;
+}
+
+/* ================= 滚动时禁止 topbar 强制 reflow ================= */
+.topbar.scrolled { background: var(--bg) !important; }
 
 /* ================= 动态高度虚拟视口 (Android 地址栏收展) ================= */
 @supports (height: 100dvh) {

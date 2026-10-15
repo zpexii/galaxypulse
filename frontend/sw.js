@@ -1,9 +1,9 @@
 // GalaxyPulse Service Worker —— v18: 腾讯数据源 GBK 修复 + 手机端 UI/K线视窗精修
-const CACHE = 'galaxypulse-v18';
-const APP_SHELL = ['./', './index.html', './styles.css?v=18', './styles.mobile.css?v=18', './app.js?v=18',
+const CACHE = 'galaxypulse-v19';
+const APP_SHELL = ['./', './index.html', './styles.css?v=19', './styles.mobile.css?v=19', './app.js?v=19',
                    './manifest.json',
-                   './bridge/storage.js?v=18', './bridge/backend.js?v=18',
-                   './bridge/service.js?v=18', './bridge/api.js?v=18',
+                   './bridge/storage.js?v=19', './bridge/backend.js?v=19',
+                   './bridge/service.js?v=19', './bridge/api.js?v=19',
                    './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {

@@ -16,7 +16,7 @@
 /* 首帧前还原主题, 避免闪烁 */
 (function(){try{var t=localStorage.getItem('gp-theme');if(t&&t!=='midnight')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();
 </script>
-<link rel="stylesheet" href="styles.css?v=18">
+<link rel="stylesheet" href="styles.css?v=19">
 </head>
 <body>
   <!-- 氛围层: 极光星云 + 胶片颗粒 (纯装饰, 不拦截交互) -->
@@ -367,12 +367,12 @@
   </template>
 
   <!-- Bridge: 本地 JS 后端 + fetch 拦截 (Capacitor / PWA 模式) -->
-  <script src="bridge/storage.js?v=18"></script>
-  <script src="bridge/backend.js?v=18"></script>
-  <script src="bridge/service.js?v=18"></script>
-  <script src="bridge/api.js?v=18"></script>
+  <script src="bridge/storage.js?v=19"></script>
+  <script src="bridge/backend.js?v=19"></script>
+  <script src="bridge/service.js?v=19"></script>
+  <script src="bridge/api.js?v=19"></script>
   <!-- 移动端样式: 仅当窗口宽度 ≤ 768px 时生效 -->
-  <link rel="stylesheet" href="styles.mobile.css?v=18" media="(max-width: 768px)">
-  <script src="app.js?v=18"></script>
+  <link rel="stylesheet" href="styles.mobile.css?v=19" media="(max-width: 768px)">
+  <script src="app.js?v=19"></script>
 </body>
 </html>
