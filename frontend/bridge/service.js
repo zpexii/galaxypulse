@@ -456,7 +456,6 @@
     const aSyms = wl.ashares || [];
     const fundSyms = wl.funds || [];
     const bondSyms = wl.macroBonds || [];
-    const fxSyms = wl.macroFx || [];
     const hfSyms = wl.macroFutures || [];
 
     const result = {
@@ -466,65 +465,84 @@
     };
     const miss = (symbol, sec, reason) => result.unresolved.push({ symbol, sec, reason });
 
-    // Concurrent fetch
+    // ====================================================================
+    // 【Android 主力】全走腾讯 qt.gtimg.cn (原生 OkHttp 直连, 零反爬)
+    // 浏览器环境下腾讯可能被 CORS 拦 —— api.js 的 fallback 兜底
+    // ====================================================================
     const jobs = {};
-    if (etfsSyms.length) jobs.sinaUs = B.sinaGet(etfsSyms.map(s => 'gb_' + s.toLowerCase()).join(','));
-    if (idxSyms.length)  jobs.txIndex = B.txGet(idxSyms.map(s => 'us' + s).join(','));
-    if (aSyms.length)    jobs.sinaA = B.sinaGet(aSyms.map(s => s.toLowerCase()).join(','));
-    if (fundSyms.length) jobs.sinaFund = B.sinaGet(fundSyms.filter(s => s.startsWith('FU')).map(s => 'fu_' + s.slice(2)).join(','));
-    if (fxSyms.length)   jobs.sinaIdx = B.sinaGet(fxSyms.join(','));
-    if (hfSyms.length) {
-      jobs.txHf = B.txGet(hfSyms.map(s => 'hf_' + s).join(','));
-      jobs.sinaHf = B.sinaGet(hfSyms.map(s => 'hf_' + s).join(','));
-    }
+    if (etfsSyms.length) jobs.txUsa = B.txGet(etfsSyms.map(s => 'us' + s).join(','));
+    if (idxSyms.length)  jobs.txIdx  = B.txGet(idxSyms.map(s => 'us' + s).join(','));
+    if (aSyms.length)    jobs.txA    = B.txGet(aSyms.map(s => s.toLowerCase()).join(','));
+    if (hfSyms.length)   jobs.txFut  = B.txGet(hfSyms.map(s => 'hf_' + s).join(','));
+
+    // 东财美债 (原样保留, Node 原生 OK)
     if (bondSyms.length) {
       jobs.emBonds = (async () => { const m = {}; for (const s of bondSyms) m[s] = await B.emBondQuote(s); return m; })();
     }
-    jobs.spark = _sparkCached();
-    if (hfSyms.includes('GC')) jobs.cngoldGc = B.cngoldQuote();
 
+    // 天天基金净值 (腾讯拿不到基金, 东财天天 LSJZ 是目前唯一原生 OK 的源)
+    if (fundSyms.length) {
+      jobs.emFunds = (async () => {
+        const m = {};
+        for (const s of fundSyms.filter(s => s.startsWith('FU'))) {
+          const code = s.slice(2);
+          try {
+            const txt = await B.httpGet(
+              `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${code}&pageIndex=1&pageSize=3`,
+              { headers: { Referer: 'https://fundf10.eastmoney.com/' }, enc: 'utf-8', timeout: 6 });
+            let j = JSON.parse(txt);
+            const list = (j.Data && j.Data.LSJZList) || [];
+            const latest = list[0] || {};
+            m[s.toUpperCase()] = {
+              symbol: s.toUpperCase(), name: STOCK_ALIASES[s.toUpperCase()]?.name || code,
+              price: parseFloat(latest.DWJZ || '0') || 0,
+              changePct: parseFloat(latest.JZZZL || '0') || 0,
+              time: latest.FSRQ || '',
+              market: 'FUND', volumeText: '基金',
+            };
+          } catch(e) { m[s.toUpperCase()] = null; }
+        }
+        return m;
+      })();
+    }
+
+    jobs.spark = _sparkCached();
+
+    // Concurrent resolve
     const results = {};
     await Promise.all(Object.keys(jobs).map(async k => {
       try { results[k] = await Promise.race([jobs[k], new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 6000))]); }
       catch (e) { results[k] = null; }
     }));
 
-    const sinaUs = B.parseSinaUs(results.sinaUs || '');
-    const txIndex = B.parseTxUs(results.txIndex || '');
-    const sinaA = B.parseSinaA(results.sinaA || '');
-    const sinaIdx = B.parseSinaIdx(results.sinaIdx || '');
-    const txHf = B.parseTxHf(results.txHf || '');
-    const sinaHf = B.parseSinaHf(results.sinaHf || '');
-    const sinaFund = B.parseSinaFund(results.sinaFund || '');
+    const txUsa = B.parseTxUsa(results.txUsa || '');
+    const txIdx = B.parseTxIndex(results.txIdx || '');
+    const txA   = B.parseTxA(results.txA || '');
+    const txFut = B.parseTxFutures(results.txFut || '');
 
-    const droppedUs = {};
-    // Re-run parse with dropped collection — we lost it earlier by not passing dropped
-    if (results.sinaUs) B.parseSinaUs(results.sinaUs, droppedUs);
-
-    // ETFs
+    // ETFs / 美股
     for (const sym of etfsSyms) {
-      const r = sinaUs[sym];
+      const r = txUsa[sym] || txIdx[sym];
       if (r) {
         r.name = B.NAMES[sym] || r.name;
         r.volumeText = volText(r.volume);
         result.etfs.push(r);
-      } else {
-        miss(sym, 'etfs', B.US_MISS_TEXT[droppedUs[sym]] || '上游无此代码');
-      }
+      } else miss(sym, 'etfs', '上游无此代码');
     }
     result.etfTime = result.etfs[0] ? result.etfs[0].time : '';
 
     // A-shares
     for (const sym of aSyms) {
-      const r = sinaA[sym.toUpperCase()];
+      const r = txA[sym.toUpperCase()];
       if (r) { r.volumeText = volText(r.volume); result.ashares.push(r); }
       else miss(sym, 'ashares', '上游无此代码');
     }
     result.aShareTime = result.ashares[0] ? result.ashares[0].time : '';
 
-    // Funds
+    // Funds (from emFunds)
+    const emFunds = results.emFunds || {};
     for (const sym of fundSyms) {
-      const r = sinaFund[sym.toUpperCase()];
+      const r = emFunds[sym.toUpperCase()];
       if (r) result.funds.push(r);
       else miss(sym, 'funds', '上游无此代码');
     }
@@ -532,42 +550,35 @@
 
     // Hero
     const heroIdx = wl.hero && idxSyms.includes(wl.hero) ? wl.hero : (idxSyms[0] || null);
-    const hero = heroIdx ? txIndex[heroIdx] : null;
+    const hero = heroIdx ? txIdx[heroIdx] : null;
     if (hero) { hero.name = B.NAMES[heroIdx] || hero.name; hero.spark = results.spark || []; }
     result.hero = hero;
 
-    // KPI index strip
+    // KPI 指数条
     for (const x of idxSyms) {
-      const r = txIndex[x];
+      const r = txIdx[x];
       if (r) result.kpis.push({ name: B.NAMES[x] || r.name, value: r.price, changePct: r.changePct, decimals: 2, tag: '指数' });
       else miss(x, 'index', '上游无此代码');
     }
 
-    // Macro
-    // bonds
+    // Macro: bonds + futures
     const bondsMap = results.emBonds || {};
     for (const code of bondSyms) {
       const r = bondsMap[code];
       if (r) result.macro.push(r);
       else miss(code, 'bonds', '上游无此代码');
     }
-    // fx
-    for (const code of fxSyms) {
-      const r = sinaIdx[code];
-      if (r) { r.name = B.NAMES[code] || r.name; r.sec = 'fx'; result.macro.push(r); }
-      else miss(code, 'fx', '上游无此代码');
-    }
-    // futures
     for (const h of hfSyms) {
-      let r = txHf[h] || sinaHf[h];
-      if (!r && h === 'GC') r = results.cngoldGc;
-      if (!r && B.EM_FUTURE_SECIDS[h]) r = await B.emFutureQuote(h);
-      if (r) { r.symbol = h; r.name = B.NAMES[h] || r.name; r.sec = 'futures'; result.macro.push(r); }
+      let r = txFut[h];
+      if (!r && B.EM_FUTURE_SECIDS[h]) {
+        try { r = await B.emFutureQuote(h); } catch(e) {}
+      }
+      if (r) { r.name = B.NAMES[h] || r.name; result.macro.push(r); }
       else miss(h, 'futures', '上游无此代码');
     }
     result.macroTime = result.macro[0] ? result.macro[0].time : '';
 
-    // KPI non-bonds strip
+    // KPI 附加 (宏观期货, 非 bonds)
     for (const m of result.macro.filter(x => x.sec !== 'bonds').slice(0, 2)) {
       result.kpis.push({ name: m.name, value: m.price, changePct: m.changePct, decimals: 2, tag: '指标' });
     }

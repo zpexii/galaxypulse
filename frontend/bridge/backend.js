@@ -297,6 +297,99 @@
     return out;
   }
 
+  // -------------------- Tencent (Android OkHttp 主力数据源) --------------------
+  // 腾讯用 `~` 分隔; 美股/中概 usXXX, A股 sh/sz, 指数 usIXIC 或 s_XXXXXX
+  function _txQuoteFields(p) {
+    const f = p.split('~');
+    if (f.length < 10 || !f[2] || f[2] === '-') return null;
+    // f[3]=最新 f[4]=昨收 f[5]=开盘 f[30]=时间 f[31]=涨跌额 f[32]=涨跌幅
+    try {
+      const price = parseFloat(f[3]);
+      const prev = parseFloat(f[4]);
+      if (!price || isNaN(price)) return null;
+      const change = (typeof f[31] !== 'undefined') ? parseFloat(f[31]) : Math.round((price - prev) * 100) / 100;
+      const changePct = (typeof f[32] !== 'undefined') ? parseFloat(f[32])
+                       : (prev ? Math.round((price - prev) / prev * 10000) / 100 : 0);
+      return {
+        name: f[1], price, prevClose: prev,
+        open: f[5] ? parseFloat(f[5]) : null,
+        high: (typeof f[33] !== 'undefined' && f[33]) ? parseFloat(f[33]) : null,
+        low:  (typeof f[34] !== 'undefined' && f[34]) ? parseFloat(f[34]) : null,
+        volume: (typeof f[6] !== 'undefined') ? parseFloat(f[6]) : 0,
+        change, changePct,
+        time: (typeof f[30] !== 'undefined') ? f[30] : '',
+      };
+    } catch(e) { return null; }
+  }
+
+  // 美股/中概/ETF: q=usAAPL,usNVDA,...  返回 v_usAAPL="...~"
+  function parseTxUsa(txt) {
+    const out = {};
+    const re = /v_us([A-Z][A-Z0-9]*?)(?:\.OQ)?="([^"]*)"/g;
+    let m;
+    while ((m = re.exec(txt)) !== null) {
+      const code = m[1].toUpperCase();
+      const f = _txQuoteFields(m[2]);
+      if (!f) continue;
+      out[code] = Object.assign({ symbol: code, sec: 'etfs' }, f);
+    }
+    return out;
+  }
+
+  // 美股指数: q=usIXIC,usINX,usDJI → v_usIXIC="...~"
+  function parseTxIndex(txt) {
+    const out = {};
+    const re = /v_us([A-Z][A-Z0-9]+)="([^"]*)"/g;
+    let m;
+    while ((m = re.exec(txt)) !== null) {
+      const code = m[1].toUpperCase();
+      const f = _txQuoteFields(m[2]);
+      if (!f) continue;
+      out[code] = Object.assign({ symbol: code, sec: 'index' }, f);
+    }
+    return out;
+  }
+
+  // A股: q=sh600519,sz300088,...
+  function parseTxA(txt) {
+    const out = {};
+    const re = /v_((?:sh|sz)\d{6})="([^"]*)"/g;
+    let m;
+    while ((m = re.exec(txt)) !== null) {
+      const code = m[1].toUpperCase();
+      const f = _txQuoteFields(m[2]);
+      if (!f) continue;
+      out[code] = Object.assign({
+        symbol: code, sec: 'ashares',
+        market: code.startsWith('SH') ? 'SH' : 'SZ',
+      }, f);
+    }
+    return out;
+  }
+
+  // 期货: q=hf_GC,hf_CL,... 用 , 分隔!
+  function parseTxFutures(txt) {
+    const out = {};
+    const re = /v_hf_([A-Z0-9]+)="([^"]*)"/g;
+    let m;
+    while ((m = re.exec(txt)) !== null) {
+      const code = m[1].toUpperCase();
+      const f = m[2].split(',');
+      if (f.length < 7) continue;
+      try {
+        const price = parseFloat(f[0]);
+        if (!price || isNaN(price)) continue;
+        out[code] = {
+          symbol: code, sec: 'futures', name: f[f.length - 1] || code,
+          price, changePct: parseFloat(f[1] || 0), prevClose: parseFloat(f[2] || 0),
+          open: parseFloat(f[3] || 0), high: parseFloat(f[4] || 0), low: parseFloat(f[5] || 0),
+          time: f[6] || '',
+        };
+      } catch(e) { continue; }
+    }
+    return out;
+  }
+
   // -------------------- EM JSON / Bond / Gold --------------------
   async function emBondQuote(sym) {
     try {
@@ -380,6 +473,8 @@
   global.GPBackend = {
     httpGet, sinaGet, txGet, decoderFor,
     parseSinaUs, parseTxUs, parseTxHf, parseSinaHf, parseSinaIdx, parseSinaA, parseSinaFund,
+    // 腾讯 (Android OkHttp 主力)
+    parseTxUsa, parseTxIndex, parseTxA, parseTxFutures,
     emBondQuote, cngoldQuote, emFutureQuote,
     US_TIME_RE, US_STALE_DAYS, US_MISS_TEXT,
     NAMES, BOND_SECIDS, EM_FUTURE_SECIDS, CNGOLD_GOLD_CODE, UA,
