@@ -19,15 +19,24 @@ import threading
 import concurrent.futures
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 
 try:
     import requests
 except ImportError:
     requests = None
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-FRONTEND_DIR = os.path.join(os.path.dirname(BASE), 'frontend')
-DATA_DIR = os.path.join(os.path.dirname(BASE), 'data')
+# BASE = 项目根目录 (galaxypulse/), 兼容源码模式和 PyInstaller 打包
+if getattr(sys, 'frozen', False):
+    # PyInstaller 打包后 sys.executable 在项目根目录
+    BASE = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    # 源码模式: server.py 在 backend/ 下, 上一级是项目根
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    BASE = os.path.dirname(_HERE)
+FRONTEND_DIR = os.path.join(BASE, 'frontend')
+DATA_DIR = os.path.join(BASE, 'data')
 os.makedirs(DATA_DIR, exist_ok=True)
 PORT = int(os.environ.get('PORT', 8000))
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -35,11 +44,17 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 
 # ---------------------------------------------------------------- HTTP
 def http_get(url, headers=None, timeout=5, enc='gbk'):
+    hdrs = headers or {"User-Agent": UA}
     if requests:
-        r = requests.get(url, headers=headers or {"User-Agent": UA}, timeout=timeout)
+        r = requests.get(url, headers=hdrs, timeout=timeout)
         return r.content.decode(enc, 'ignore')
-    req = urllib_request(url, headers=headers or {"User-Agent": UA})
-    return req
+    # requests 不可用时走标准库 urllib (零依赖兜底)
+    try:
+        req = Request(url, headers=hdrs)
+        with urlopen(req, timeout=timeout) as resp:
+            return resp.read().decode(enc, 'ignore')
+    except (URLError, HTTPError):
+        return ''
 
 def sina_get(symbols):
     return http_get(f"https://hq.sinajs.cn/list={symbols}",
