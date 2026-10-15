@@ -130,7 +130,9 @@
     const p = fq
       ? `${src},day,,,${Math.max(n, 60)},qfq`
       : `${src},day,,,${Math.max(n, 60)}`;
-    const url = `https://web.ifzq.gtimg.cn/appstock/app/${fq ? 'fqkline' : 'kline'}/get?param=${encodeURIComponent(p)}`;
+    // 注意: param 里的逗号不能 encodeURIComponent —— plain kline 不认 %2C (仅 fqkline 兼容)
+    // 路径不同: 复权是 fqkline/get, 普通是 kline/kline (不是 kline/get!)
+    const url = `https://web.ifzq.gtimg.cn/appstock/app/${fq ? 'fqkline/get' : 'kline/kline'}?param=${p}`;
     const txt = await B.httpGet(url, { enc: 'utf-8', timeout: 8 });
     if (!txt) return [];
     let j; try { j = JSON.parse(txt); } catch(e) { return []; }
@@ -224,8 +226,16 @@
       return { type: 'candles', bars };
     }
     if (sec === 'funds') return { type: 'line', bars: await _fundNavline(symbol, n) };
-    if (sec === 'index') return { type: 'candles', bars: await _txDayKline('us.' + symbol, n, false) };
-    if (sec === 'futures') return { type: 'candles', bars: await _sinaFutureKline(symbol, n) };
+    // 指数: 必须走 plain kline (fqkline 复权接口对指数只返回 1 根)
+    if (sec === 'index' || sec === 'indexes') {
+      return { type: 'candles', bars: await _txDayKline('us.' + symbol, n, false) };
+    }
+    if (sec === 'futures') {
+      // 腾讯期货日 K (新浪期货在 Android 原生层反爬); 失败再试新浪
+      let bars = await _txDayKline('hf_' + symbol, n, false);
+      if (!bars.length) bars = await _sinaFutureKline(symbol, n);
+      return { type: 'candles', bars };
+    }
     if (sec === 'bonds') return { type: 'candles', bars: await _emBondKline(symbol, n) };
     if (sec === 'fx') return { type: 'line', bars: [] };
     // etfs / 美股
@@ -400,8 +410,13 @@
     let bars = [];
     try {
       if (kind === 'tx') {
-        const p = `${src},day,2015-01-01,${new Date().toISOString().slice(0,10)},${Math.max(n, 60)},`;
-        const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${encodeURIComponent(p)}`;
+        // 指数代码 us.IXIC/us.INX/us.DJI 必须走 plain kline, fqkline 对指数只返回 1 根
+        const isIndexSrc = src.startsWith('us.');
+        const endpoint = isIndexSrc ? 'kline/kline' : 'fqkline/get';
+        const p = isIndexSrc
+          ? `${src},day,,,${Math.max(n, 60)}`
+          : `${src},day,2015-01-01,${new Date().toISOString().slice(0,10)},${Math.max(n, 60)},`;
+        const url = `https://web.ifzq.gtimg.cn/appstock/app/${endpoint}?param=${p}`;
         const txt = await B.httpGet(url, { enc: 'utf-8', timeout: 10 });
         const j = JSON.parse(txt);
         const node = (j.data || {})[src] || {};
@@ -475,16 +490,19 @@
     if (aSyms.length)    jobs.txA    = B.txGet(aSyms.map(s => s.toLowerCase()).join(','));
     if (hfSyms.length)   jobs.txFut  = B.txGet(hfSyms.map(s => 'hf_' + s).join(','));
 
-    // 东财美债 (原样保留, Node 原生 OK)
+    // 东财美债 (原样保留, Node 原生 OK), 并发
     if (bondSyms.length) {
-      jobs.emBonds = (async () => { const m = {}; for (const s of bondSyms) m[s] = await B.emBondQuote(s); return m; })();
+      jobs.emBonds = (async () => {
+        const entries = await Promise.all(bondSyms.map(async s => [s, await B.emBondQuote(s)]));
+        return Object.fromEntries(entries);
+      })();
     }
 
     // 天天基金净值 (腾讯拿不到基金, 东财天天 LSJZ 是目前唯一原生 OK 的源)
     if (fundSyms.length) {
       jobs.emFunds = (async () => {
-        const m = {};
-        for (const s of fundSyms.filter(s => s.startsWith('FU'))) {
+        const codes = fundSyms.filter(s => s.startsWith('FU'));
+        const entries = await Promise.all(codes.map(async (s) => {
           const code = s.slice(2);
           try {
             const txt = await B.httpGet(
@@ -493,26 +511,36 @@
             let j = JSON.parse(txt);
             const list = (j.Data && j.Data.LSJZList) || [];
             const latest = list[0] || {};
-            m[s.toUpperCase()] = {
-              symbol: s.toUpperCase(), name: STOCK_ALIASES[s.toUpperCase()]?.name || code,
-              price: parseFloat(latest.DWJZ || '0') || 0,
-              changePct: parseFloat(latest.JZZZL || '0') || 0,
+            const price = parseFloat(latest.DWJZ || '0') || 0;
+            const pct = parseFloat(latest.JZZZL || '0') || 0;
+            // 用日增长率反推涨跌额: prev = price / (1 + pct/100)
+            const change = pct ? Math.round((price - price / (1 + pct / 100)) * 10000) / 10000 : 0;
+            const aliasName = STOCK_ALIASES[s.toUpperCase()]?.name;
+            return [s.toUpperCase(), {
+              symbol: s.toUpperCase(),
+              name: aliasName || `基金 ${code}`,
+              price,
+              change,
+              changePct: pct,
+              prevClose: pct ? Math.round(price / (1 + pct / 100) * 10000) / 10000 : price,
               time: latest.FSRQ || '',
-              market: 'FUND', volumeText: '基金',
-            };
-          } catch(e) { m[s.toUpperCase()] = null; }
-        }
-        return m;
+              market: 'FUND', volumeText: '净值',
+            }];
+          } catch(e) { return [s.toUpperCase(), null]; }
+        }));
+        return Object.fromEntries(entries);
       })();
     }
 
     jobs.spark = _sparkCached();
 
-    // Concurrent resolve
+    // 硬上限 4.5s: 任一数据源(东财/基金/腾讯) TCP 挂起时不拖死首屏,
+    // 已拿到的板块先渲染, 缺失的下轮 60s 轮询补全
     const results = {};
     await Promise.all(Object.keys(jobs).map(async k => {
-      try { results[k] = await Promise.race([jobs[k], new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 6000))]); }
-      catch (e) { results[k] = null; }
+      try {
+        results[k] = await Promise.race([jobs[k], new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 4500))]);
+      } catch (e) { results[k] = null; }
     }));
 
     const txUsa = B.parseTxUsa(results.txUsa || '');
@@ -572,6 +600,13 @@
       let r = txFut[h];
       if (!r && B.EM_FUTURE_SECIDS[h]) {
         try { r = await B.emFutureQuote(h); } catch(e) {}
+      }
+      // 新浪期货兜底 (如纳指期货 NQ: 腾讯无此码, 东财 secid 不稳)
+      if (!r) {
+        try {
+          const sf = B.parseSinaHf(await B.sinaGet('hf_' + h));
+          if (sf[h]) r = sf[h];
+        } catch(e) {}
       }
       if (r) { r.name = B.NAMES[h] || r.name; result.macro.push(r); }
       else miss(h, 'futures', '上游无此代码');

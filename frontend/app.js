@@ -248,6 +248,15 @@ function renderKpis(q){
     d.textContent= (k.changePct!=null? (k.changePct>0?'+':'')+k.changePct.toFixed(2)+'%':'');
     d.classList.add(cls(k.changePct));
     if(!state.hasPainted){ nc.classList.add('card-in'); nc.style.animationDelay=(idx*45)+'ms'; }
+    // KPI 卡点击 → 打开对应指数/宏观指标的历史走势
+    nc.classList.add('clickable');
+    nc.addEventListener('click', ()=>{
+      const qq = state.quote; if(!qq) return;
+      const pool = [qq.hero, ...(qq.etfs||[]), ...(qq.ashares||[]), ...(qq.funds||[]), ...(qq.macro||[])].filter(Boolean);
+      const hit = pool.find(x => x.name === k.name)
+               || pool.find(x => x.name && k.name && x.name.includes(k.name));
+      if(hit && hit.symbol) openHist(hit.symbol, qq, hit.name, hit.sec || (k.tag === '指数' ? 'indexes' : null));
+    });
     el.kpis.appendChild(node);
   });
   old.forEach((c,key)=>{ if(!keep.has(key)) c.remove(); });
@@ -829,7 +838,14 @@ function renderHero(q){
 
   // Hero 四宫格 mini stat (开盘/最高/最低/成交)
   const hs = q.hero || {};
-  const setStat = (id, v) => { const n=document.getElementById(id); if(n) n.textContent = v==null?'--':fmt(v, (id==='hsVol2')?0:2); };
+  const isMobile = window.matchMedia('(max-width: 768px)').matches;
+  const setStat = (id, v) => {
+    const n=document.getElementById(id); if(!n) return;
+    if(v==null){ n.textContent='--'; return; }
+    n.textContent = (id==='hsVol2')
+      ? (isMobile ? fmtVol(v) : fmt(v, 0))
+      : fmt(v, 2);
+  };
   setStat('hsOpen',  hs.open);
   setStat('hsHigh2', hs.high);
   setStat('hsLow2',  hs.low);
@@ -963,16 +979,53 @@ const hist = {
   },
   sym: null, sec: null, rg: '3M', data: null, cache: {}, quote: null, mode: 'area',
   drag: null, cross: null, // {i0,i1} / {x,idx,py}
+  winStart: null, winCount: null,   // 手机端可视窗口 (全局索引); null = 全量 (桌面)
+  pan: null,                        // 手机端水平平移手势状态
 };
 const RANGES = [['1W','1周'],['1M','1月'],['3M','3月'],['6M','6月'],['1Y','1年'],['2Y','2年'],['ALL','全部']];
 const fmtHist = (v,d=2) => v==null?'--':Number(v).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
 
+const isMobileView = () => window.matchMedia('(max-width: 768px)').matches;
+// 手机端单窗口默认 K 线数 (蜡烛 60 根疏密合适; 超出可拖动回看)
+const MOBILE_WIN_CANDLE = 60, MOBILE_WIN_AREA = 90;
+
+// 当前可视切片: { bars, i0 } —— i0 是相对完整数据的起始全局索引
+function visSlice(d){
+  if(!d || !d.bars) return { bars: [], i0: 0, n: 0 };
+  if(!isMobileView() || hist.winStart==null){
+    return { bars: d.bars, i0: 0, n: d.bars.length };
+  }
+  const s = Math.max(0, Math.min(hist.winStart, d.bars.length - 1));
+  const c = Math.min(hist.winCount || d.bars.length, d.bars.length - s);
+  return { bars: d.bars.slice(s, s + c), i0: s, n: c };
+}
+
+// 手机端: 数据加载后初始化窗口 (对准最新)
+function initMobileWin(d){
+  if(!isMobileView() || !d?.bars?.length){ hist.winStart=null; hist.winCount=null; return; }
+  const want = hist.mode === 'candle' ? MOBILE_WIN_CANDLE : MOBILE_WIN_AREA;
+  hist.winCount = Math.min(want, d.bars.length);
+  hist.winStart = d.bars.length - hist.winCount;
+}
+
+// 平移窗口; dxBars 为相对根数 (向左看更早 → 负)
+function panWin(dxBars){
+  const d = hist.data; if(!d?.bars?.length || hist.winStart==null) return;
+  const maxStart = d.bars.length - hist.winCount;
+  hist.winStart = Math.max(0, Math.min(maxStart, hist.winStart + dxBars));
+}
+
 function openHist(sym, quote, displayName, sec){
   hist.sym = sym; hist.sec = sec || null; hist.rg = '3M'; hist.quote = quote;
-  hist.data = null; hist.drag = null; hist.cross = null;
+  hist.data = null; hist.drag = null; hist.cross = null; hist.pan = null;
+  hist.winStart = null; hist.winCount = null;
   hist.el.quoteCurrent = quote;
   hist.el.symbol.textContent = sym;
   hist.el.name.textContent = displayName || sym;
+  // 手机/桌面提示文案
+  hist.el.hint.textContent = isMobileView()
+    ? '左右拖动查看历史 · 轻点查看当日 · 双击回最新'
+    : '↔ 拖拽可框选区间，查看区间涨跌';
   // 重置范围选中
   hist.el.ranges.querySelectorAll('.hr').forEach(b=> b.classList.toggle('active', b.dataset.range==='3M'));
   setMode('area');
@@ -996,6 +1049,10 @@ function closeHist(){
 function setMode(m){
   hist.mode = m;
   document.querySelectorAll('#chartModes .cm').forEach(b=> b.classList.toggle('active', b.dataset.mode===m));
+  // 手机端切换图表模式时按新密度重设窗口并对准最新
+  if(hist.data && hist.data.ok && isMobileView()){
+    initMobileWin(hist.data);
+  }
   if(hist.data && hist.data.ok && !hist.el.sheet.classList.contains('hidden')) drawHist(hist.data);
 }
 async function loadHist(rg, animate=false){
@@ -1017,6 +1074,7 @@ async function loadHist(rg, animate=false){
     if(requestId !== hist.requestId) return;
     if(!d.ok){ showHistEmpty(); return; }
     hist.data = d;
+    initMobileWin(d);   // 手机端对准最新 60/90 根; 桌面端为全量 null
     const up = d.changePct >= 0;
     // 基金只有单位净值 (line): 禁用 K线切换, 强制线图
     const candleBtn = document.querySelector('#chartModes .cm[data-mode="candle"]');
@@ -1085,6 +1143,12 @@ function showHistEmpty(){
 }
 // ---------- 历史图绘制 ----------
 const HIST_RATIO = { padT: 14, padB: 34, padL: 54, padR: 14 };
+function histPad(){
+  // 手机端纵轴价格留白收窄, 把宽度还给 K 线
+  return isMobileView()
+    ? { padT: 12, padB: 28, padL: 42, padR: 8 }
+    : HIST_RATIO;
+}
 const histDec = (v)=> v==null?2 : (v>=100?2 : (v>=10?3:4));
 function setupCanvas(c){
   const dpr = window.devicePixelRatio||1;
@@ -1096,21 +1160,24 @@ function setupCanvas(c){
   const g = c.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0);
   return {g, W, H};
 }
-function histAnchors(d, W, H){
-  const lo = Math.min(...d.bars.map(b=>b.l));
-  const hi = Math.max(...d.bars.map(b=>b.h));
+function histAnchors(bars, W, H){
+  const lo = Math.min(...bars.map(b=>b.l));
+  const hi = Math.max(...bars.map(b=>b.h));
   const range = (hi - lo) || hi*0.001 || 1;
   const pad = range*0.10;
   return { mn: lo - pad, mx: hi + pad };
 }
 function priceY(v, mn, mx, W, H){
-  const top = HIST_RATIO.padT, bot = H - HIST_RATIO.padB;
+  const pd = histPad();
+  const top = pd.padT, bot = H - pd.padB;
   return bot - (v-mn)/(mx-mn)*(bot-top);
 }
-function histGeo(d, W, H){
-  const pd = HIST_RATIO, n = d.bars.length;
-  const xAt = (i)=> pd.padL + (n===1?0:(i/(n-1))*(W - pd.padL - pd.padR));
-  return {xAt, n, pd};
+// xAt 收【全局索引】, 内部换算到可视切片
+function histGeo(vis, W, H){
+  const pd = histPad();
+  const n = vis.n;
+  const xAt = (gi)=> pd.padL + (n===1?0:((gi - vis.i0)/(n-1))*(W - pd.padL - pd.padR));
+  return {xAt, n, pd, i0: vis.i0};
 }
 function roundRect(g, x, y, w, h, r){
   r = Math.min(r, w/2, h/2);
@@ -1121,11 +1188,13 @@ function roundRect(g, x, y, w, h, r){
 function drawHistFrame(d, prog=1, view){
   if(!d || !d.bars || !d.bars.length) return;
   const {g, W, H} = setupCanvas(hist.el.canvas);
-  const pd = HIST_RATIO;
-  const {mn, mx} = histAnchors(d, W, H);
-  const {xAt, n} = histGeo(d, W, H);
+  const vis = visSlice(d);
+  const bars = vis.bars, i0 = vis.i0;
+  const pd = histPad();
+  const {mn, mx} = histAnchors(bars, W, H);
+  const {xAt, n} = histGeo(vis, W, H);
   const yAt = (c)=> priceY(c, mn, mx, W, H);
-  const maxV = d.bars.reduce((m,b)=>Math.max(m,b.v),1);
+  const maxV = bars.reduce((m,b)=>Math.max(m,b.v),1);
   const up = d.changePct >= 0;
   const col = up? P.up : P.down;
   const colSoft = a => rgbaRGB(up ? P.upRGB : P.downRGB, a);
@@ -1134,7 +1203,7 @@ function drawHistFrame(d, prog=1, view){
   const k = Math.min(n, Math.max(2, Math.floor(n*prog)));
 
   g.clearRect(0,0,W,H);
-  g.font = '10.5px -apple-system, PingFang SC, sans-serif';
+  g.font = (isMobileView()?'9.5px':'10.5px') + ' -apple-system, PingFang SC, sans-serif';
 
   // ---- 背景横格 + 纵轴价格刻度 ----
   g.textAlign = 'right'; g.textBaseline = 'middle';
@@ -1145,43 +1214,59 @@ function drawHistFrame(d, prog=1, view){
     const y = yAt(v);
     g.beginPath(); g.moveTo(pd.padL,y); g.lineTo(W-pd.padR,y); g.stroke();
     if(i>0 && i<plimit-1) continue;           // 只标上下与中间
-    g.fillStyle = rgbaRGB(P.dimRGB,0.8);
-    g.fillText(v.toLocaleString('en-US',{maximumFractionDigits: dec}), pd.padL-8, y);
+    const label = v.toLocaleString('en-US',{maximumFractionDigits: dec});
+    g.font = (isMobileView()?'9px':'10.5px') + ' -apple-system, PingFang SC, sans-serif';
+    if(isMobileView()){
+      // 手机: 标签放绘图区【内侧】, 半透明胶囊
+      const tw = g.measureText(label).width + 12;
+      // 最高价贴顶线下, 最低价在成交量区之上
+      const ly = (i===0) ? y - 12 : y + 12;
+      g.fillStyle = 'rgba(8,11,22,0.72)';
+      roundRect(g, pd.padL+4, ly-8, tw, 16, 6); g.fill();
+      g.fillStyle = rgbaRGB(P.dimRGB,0.9);
+      g.textAlign='left'; g.textBaseline='middle';
+      g.fillText(label, pd.padL+10, ly);
+    } else {
+      g.fillStyle = rgbaRGB(P.dimRGB,0.8);
+      g.textAlign='right';
+      g.fillText(label, pd.padL-8, y);
+    }
   }
 
   // ---- 成交量 副图 (高度 1:4) ----
   const vBase = H - pd.padB + 4, vMaxH = pd.padB - 8;
-  const bw = Math.max(1, Math.min(3, (W - pd.padL - pd.padR)/n * 0.72));
+  const bwVol = Math.max(1, Math.min(3, (W - pd.padL - pd.padR)/n * 0.72));
   for(let i=0;i<k;i++){
-    const b = d.bars[i];
+    const b = bars[i];
     const bh = (b.v/maxV)*vMaxH;
     g.fillStyle = (b.c>=b.o)? rgbaRGB(P.upRGB,0.22) : rgbaRGB(P.downRGB,0.16);
-    g.fillRect(xAt(i)-bw/2, vBase - bh, bw, Math.max(1,bh));
+    g.fillRect(xAt(i0+i)-bwVol/2, vBase - bh, bwVol, Math.max(1,bh));
   }
 
-  // ---- 区间起始基准线 (Apple 白色基线) ----
-  const baseC = d.bars[0].c, baseY = yAt(baseC);
+  // ---- 视图起始基准线 (手机为窗口首根, 桌面为全区间首根) ----
+  const baseC = bars[0].c, baseY = yAt(baseC);
   if(prog>=1){
     g.save();
     g.strokeStyle = rgbaRGB(P.textRGB,0.26); g.setLineDash([2,5]); g.lineWidth=1;
     g.beginPath(); g.moveTo(pd.padL,baseY); g.lineTo(W-pd.padR,baseY); g.stroke();
     g.setLineDash([]);
     g.fillStyle=rgbaRGB(P.textRGB,0.5);
+    g.textAlign='right';
     g.fillText('基准 '+fmtHist(baseC,dec), W-pd.padR-4, baseY-6);
     g.restore();
   }
 
   // ---- 主序列 ----
   if(hist.mode==='candle'){
-    drawCandles(g, d, k, xAt, yAt, W, H, pd);
+    drawCandles(g, bars, i0, k, xAt, yAt, W, H, pd, dec);
   } else {
-    drawArea(g, d, k, xAt, yAt, W, H, pd, col, colSoft, dec, prog);
+    drawArea(g, bars, i0, k, xAt, yAt, W, H, pd, col, colSoft, dec, prog);
   }
 
-  // ---- 区间框选高亮 ----
+  // ---- 区间框选高亮 (sel 为全局索引) ----
   if(view && view.sel){
-    const {i0, i1} = view.sel;
-    const x0 = xAt(i0), x1 = xAt(i1);
+    const {i0:si0, i1:si1} = view.sel;
+    const x0 = xAt(si0), x1 = xAt(si1);
     g.save();
     const bg = g.createLinearGradient(0, pd.padT, 0, H-pd.padB);
     bg.addColorStop(0, rgbaRGB(P.accentRGB,0.16)); bg.addColorStop(1, rgbaRGB(P.accent2RGB,0.10));
@@ -1191,22 +1276,39 @@ function drawHistFrame(d, prog=1, view){
     g.restore();
   }
 
-  // ---- 底部日期刻度 (自适应抽样) ----
+  // ---- 底部日期刻度 (自适应抽样, 全局索引) ----
   g.textAlign = 'center';
-  g.fillStyle = rgbaRGB(P.dimRGB,0.6); g.font='10px -apple-system, PingFang SC, sans-serif';
-  const nTicks = Math.min(5, Math.max(3, Math.floor(W/120)));
+  g.fillStyle = rgbaRGB(P.dimRGB,0.65);
+  g.font=(isMobileView()?'9.5px':'10px') + ' -apple-system, PingFang SC, sans-serif';
+  const nTicks = Math.min(5, Math.max(3, Math.floor(W/(isMobileView()?72:120))));
   const step = Math.max(1, Math.round((n-1)/nTicks));
   for(let i=0;i<=n; i+=step){
     const di = Math.min(n-1,i);
-    g.fillText(d.bars[di].d.slice(5), xAt(di), H-10);
+    const lbl = bars[di].d.slice(5);
+    if(di===0){ g.textAlign='left'; g.fillText(lbl, pd.padL, H-9); }
+    else if(di===n-1){ g.textAlign='right'; g.fillText(lbl, W-pd.padR, H-9); }
+    else { g.textAlign='center'; g.fillText(lbl, xAt(i0+di), H-9); }
+  }
+
+  // ---- 手机端: 不在最末端时, 右缘给"最新"微光提示 ----
+  if(isMobileView() && i0 + n < d.bars.length){
+    g.save();
+    const eg = g.createLinearGradient(W-34, 0, W-2, 0);
+    eg.addColorStop(0, 'rgba(255,255,255,0)');
+    eg.addColorStop(1, rgbaRGB(P.accentRGB, 0.16));
+    g.fillStyle = eg;
+    g.fillRect(W-34, pd.padT, 32, H-pd.padB-pd.padT);
+    g.restore();
   }
 
   hist.el.canvas.style.opacity = 1;
-  hist.el.tipX = xAt; hist.el.yAt = yAt; hist.el.anchors = {mn,mx}; hist.el.n= n;
+  hist.el.tipX = xAt; hist.el.yAt = yAt; hist.el.anchors = {mn,mx};
+  hist.el.n = n; hist.el.i0 = i0;
+  hist.el.barStep = n>1 ? (W - pd.padL - pd.padR)/(n-1) : 0;
 }
 
-function drawArea(g, d, k, xAt, yAt, W, H, pd, col, colSoft, dec, prog){
-  const list = d.bars.slice(0,k).map((b,i)=>[xAt(i), yAt(b.c)]);
+function drawArea(g, bars, i0, k, xAt, yAt, W, H, pd, col, colSoft, dec, prog){
+  const list = bars.slice(0,k).map((b,i)=>[xAt(i0+i), yAt(b.c)]);
   const segs = smoothPath(list);
   const trace = (g)=>{
     g.beginPath(); g.moveTo(segs[0].x, segs[0].y);
@@ -1225,8 +1327,8 @@ function drawArea(g, d, k, xAt, yAt, W, H, pd, col, colSoft, dec, prog){
   // 主序线 + 光晕 (Apple 柔光)
   g.save();
   trace(g);
-  g.strokeStyle = col; g.lineWidth = 2; g.lineJoin='round'; g.lineCap='round';
-  g.shadowColor = colSoft(0.45); g.shadowBlur = 14;
+  g.strokeStyle = col; g.lineWidth = isMobileView()?2:2; g.lineJoin='round'; g.lineCap='round';
+  g.shadowColor = colSoft(0.45); g.shadowBlur = isMobileView()?9:14;
   g.stroke();
   g.restore();
   // 末端圆点 + 价格标签
@@ -1234,19 +1336,26 @@ function drawArea(g, d, k, xAt, yAt, W, H, pd, col, colSoft, dec, prog){
     g.beginPath(); g.arc(lastX, lastY, 3.2, 0, Math.PI*2);
     g.fillStyle = col; g.strokeStyle=P.candleEdge; g.lineWidth=2; g.fill(); g.stroke();
     g.textAlign='left'; g.fillStyle = col; g.font='600 11px -apple-system, PingFang SC, sans-serif';
-    g.fillText(fmtHist(d.bars[k-1].c, dec), lastX+8, lastY-5);
+    // 末端靠近右缘时标签翻到左侧, 防裁切
+    const lb = fmtHist(bars[k-1].c, dec);
+    if(lastX > W - pd.padL - 8){
+      g.textAlign='right';
+      g.fillText(lb, lastX-7, lastY-5);
+    } else {
+      g.fillText(lb, lastX+8, lastY-5);
+    }
   }
 }
 
-function drawCandles(g, d, k, xAt, yAt, W, H, pd){
+function drawCandles(g, bars, i0, k, xAt, yAt, W, H, pd, dec){
   const plotW = (W - pd.padL - pd.padR);
-  const bw = Math.max(1.5, Math.min(26, plotW/k*0.62));   // 上限避免极短数据画出巨型蜡烛
+  const bw = Math.max(isMobileView()?2:1.5, Math.min(26, plotW/k*0.62));
   const half = bw/2;
   for(let i=0;i<k;i++){
-    const b = d.bars[i];
+    const b = bars[i];
     const upD = b.c>=b.o;
     const colC = upD?P.up:P.down;
-    const x = xAt(i);
+    const x = xAt(i0+i);
     const yo = yAt(b.o), yc = yAt(b.c);
     const top = Math.min(yo,yc), hgt = Math.max(1, Math.abs(yc-yo));
     // 影线
@@ -1260,10 +1369,10 @@ function drawCandles(g, d, k, xAt, yAt, W, H, pd){
   // 收盘价参考线
   g.save();
   g.font='600 11px -apple-system, PingFang SC, sans-serif';
-  g.textAlign='left';
-  const last = d.bars[k-1], ly = yAt(last.c), dec = histDec(last.c);
+  const last = bars[k-1], lx = xAt(i0+k-1), ly = yAt(last.c), d2 = histDec(last.c);
   g.fillStyle = last.c>=last.o? P.up:P.down;
-  g.fillText(fmtHist(last.c,dec), xAt(k-1)+4, ly-4);
+  if(lx > W - pd.padL - 8){ g.textAlign='right'; g.fillText(fmtHist(last.c,d2), lx-7, ly-4); }
+  else { g.textAlign='left'; g.fillText(fmtHist(last.c,d2), lx+4, ly-4); }
   g.restore();
 }
 
@@ -1289,14 +1398,16 @@ function drawHist(d, view=null){
   setupCanvas(hist.el.canvas);
   drawHistFrame(d, 1, view);
 }
+// 返回【全局索引】
 function histIdxAt(e){
   const d = hist.data; if(!d || !d.ok) return -1;
   const rect = hist.el.canvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
-  const xs = hist.el.tipX, n = hist.el.n;
-  if(!xs) return -1;
-  let idx = Math.round((x - xs(0)) / ((xs(1)-xs(0))||1));
-  return Math.max(0, Math.min(n-1, idx));
+  const i0 = hist.el.i0 || 0, n = hist.el.n;
+  if(!hist.el.tipX) return -1;
+  const step = hist.el.tipX(i0+1) - hist.el.tipX(i0) || 1;
+  const idx = i0 + Math.round((x - hist.el.tipX(i0)) / step);
+  return Math.max(i0, Math.min(i0+n-1, idx));
 }
 
 // ---------- 十字准星 + 提示 ----------
@@ -1305,7 +1416,7 @@ function paintCross(g, d, view){
   const b = d.bars[idx];
   const px = hist.el.tipX(idx), py = hist.el.yAt(b.c);
   const W = hist.el._W, H = hist.el._H;
-  const pd = HIST_RATIO;
+  const pd = histPad();
   // 全屏十字线
   g.save();
   g.strokeStyle=rgbaRGB(P.textRGB,0.22); g.setLineDash([3,4]); g.lineWidth=1;
@@ -1321,68 +1432,107 @@ function paintCross(g, d, view){
   const label = fmtHist(b.c, dec);
   g.font='600 10px -apple-system, PingFang SC, sans-serif';
   const tw = g.measureText(label).width+12;
-  g.fillStyle=P.tipBg; roundRect(g, W-pd.padR+2, py-9, tw, 18, 6); g.fill();
-  g.fillStyle=P.tipText; g.textAlign='left'; g.textBaseline='middle';
-  g.fillText(label, W-pd.padR+8, py+0.5);
+  g.fillStyle=P.tipBg; roundRect(g, W-pd.padR-tw+2, py-9, tw, 18, 6); g.fill();
+  g.fillStyle=P.tipText; g.textAlign='center'; g.textBaseline='middle';
+  g.fillText(label, W-pd.padR-tw/2+2, py+0.5);
   // 底部日期轴标签
   const dl = b.d;
   g.font='600 10px -apple-system, PingFang SC, sans-serif';
   const dw = g.measureText(dl).width+12;
   const dx = Math.max(pd.padL, Math.min(W-pd.padR-dw, px-dw/2));
-  g.fillStyle=P.tipBg; roundRect(g, dx, H-10, dw, 16, 6); g.fill();
+  g.fillStyle=P.tipBg; roundRect(g, dx, H-22, dw, 16, 6); g.fill();
   g.fillStyle=rgbaRGB(P.tipTextRGB,0.9); g.textAlign='center';
-  g.fillText(dl, dx+dw/2, H-2);
+  g.fillText(dl, dx+dw/2, H-14);
   g.restore();
 }
+// 十字光标数据卡 (桌面 hover / 手机轻点 共用)
+function showCrossTip(idx){
+  const d = hist.data; if(!d?.ok) return;
+  const b = d.bars[idx]; if(!b) return;
+  hist.cross = {idx};
+  const tip = hist.el.tip;
+  const upDay = b.c>=b.o, dayChg = b.o? ((b.c-b.o)/b.o*100):0;
+  tip.innerHTML = `<div class="tip-date">${b.d}</div>
+    <div class="tip-row"><span>开</span><b>${fmtHist(b.o,histDec(b.c))}</b><span>收</span><b>${fmtHist(b.c,histDec(b.c))}</b></div>
+    <div class="tip-row"><span>高</span><b>${fmtHist(b.h,histDec(b.c))}</b><span>低</span><b>${fmtHist(b.l,histDec(b.c))}</b></div>
+    <div class="tip-vol">成交 <b>${fmtVol(b.v)}</b></div>
+    <div class="tip-delta ${upDay?'up':'down'}">${upDay?'+':''}${dayChg.toFixed(2)}%</div>`;
+  tip.style.display='block'; tip.classList.add('show');
+  const {g, W, H} = setupCanvas(hist.el.canvas); hist.el._W=W; hist.el._H=H;
+  drawHistFrame(d, 1, {cross:{idx}});
+  paintCross(g, d, {cross:{idx}});
+  const x = hist.el.tipX(idx);
+  const histChart = document.getElementById('histChart');
+  const crossV = document.getElementById('crossV');
+  const crossH = document.getElementById('crossH');
+  if (crossV && crossH) {
+    crossV.style.left = x + 'px';
+    const vis = visSlice(d);
+    const {mn,mx} = histAnchors(vis.bars, W, H);
+    crossH.style.top = priceY(b.c, mn, mx, W, H) + 'px';
+    histChart.classList.add('cross-on');
+  }
+}
+function hideCross(){
+  hist.cross = null;
+  hist.el.tip.classList.remove('show'); hist.el.tip.style.display='none';
+  document.getElementById('histChart').classList.remove('cross-on');
+  if(hist.data?.ok) drawHist(hist.data);
+}
+
+// ================= 手势: 手机=拖动平移/轻点十字, 桌面=框选/悬停 =================
 hist.el.canvas.addEventListener('pointerdown', (e)=>{
+  const d = hist.data; if(!d?.ok) return;
   e.preventDefault();
-  const idx = histIdxAt(e);
-  if(idx<0) return;
-  hist.drag = {i0: idx, i1: idx, x0: hist.el.tipX(idx), started: false};
   hist.el.canvas.setPointerCapture && hist.el.canvas.setPointerCapture(e.pointerId);
-  hist.el.tip.style.display='none';
+  const idx = histIdxAt(e);
   hist.el.hint.style.display='none';
+  if(isMobileView()){
+    hist.pan = { x0:e.clientX, y0:e.clientY, start:hist.winStart ?? 0,
+                 moved:false, panning:false, axis:null, tapIdx:idx };
+    hist.drag = null;
+  } else {
+    if(idx<0) return;
+    hist.drag = {i0: idx, i1: idx, x0: hist.el.tipX(idx), started: false};
+    hist.el.tip.style.display='none';
+  }
 });
 hist.el.canvas.addEventListener('pointermove', (e)=>{
   const d = hist.data; if(!d || !d.ok) return;
+  if(isMobileView()){
+    const p = hist.pan; if(!p) return;
+    const dx = e.clientX - p.x0, dy = e.clientY - p.y0;
+    if(!p.moved && (Math.abs(dx) > 8 || Math.abs(dy) > 8)){
+      p.moved = true;
+      p.axis = (Math.abs(dx) > Math.abs(dy)) ? 'x' : 'y';
+      if(p.axis === 'x') p.panning = true;
+    }
+    if(p.panning){
+      const stepPx = hist.el.barStep || 6;
+      const maxStart = d.bars.length - (hist.winCount ?? d.bars.length);
+      const ns = Math.max(0, Math.min(maxStart, p.start + Math.round(-dx / stepPx)));
+      if(ns !== hist.winStart){
+        hist.winStart = ns;
+        hist.el.tip.style.display='none';
+        hist.el.selWrap.style.display='none';
+        drawHist(d);
+      }
+    }
+    return;
+  }
+  // ---- 桌面: 框选 / 悬停十字 ----
   if(hist.drag){
     const idx = histIdxAt(e);
     if(idx<0) return;
     hist.drag.i1 = idx;
-    const dx0 = Math.abs(hist.el.tipX(idx) - hist.drag.x0);
-    if(dx0 < 2 && !hist.drag.started) return;   // 未形成拖拽
+    if(Math.abs(hist.el.tipX(idx) - hist.drag.x0) < 2 && !hist.drag.started) return;
     hist.drag.started = true;
-    historyCssCoord();                          // 更新 DOM 选框
+    historyCssCoord();
     drawHist(d, {sel: {i0: Math.min(hist.drag.i0,hist.drag.i1), i1: Math.max(hist.drag.i0,hist.drag.i1)}});
     document.getElementById('histChart').classList.remove('cross-on');
   } else {
     const idx = histIdxAt(e);
-    if(idx<0) return;
-    hist.cross = {idx};
-    const b = d.bars[idx];
-    const tip = hist.el.tip;
-    tip.style.display='block';
-    const upDay = b.c>=b.o, dayChg = b.o? ((b.c-b.o)/b.o*100):0;
-    tip.innerHTML = `<div class="tip-date">${b.d}</div>
-      <div class="tip-row"><span>开</span><b>${fmtHist(b.o,histDec(b.c))}</b><span>收</span><b>${fmtHist(b.c,histDec(b.c))}</b></div>
-      <div class="tip-row"><span>高</span><b>${fmtHist(b.h,histDec(b.c))}</b><span>低</span><b>${fmtHist(b.l,histDec(b.c))}</b></div>
-      <div class="tip-vol">成交 <b>${fmtHist(b.v,0)}</b></div>
-      <div class="tip-delta ${upDay?'up':'down'}">${upDay?'+':''}${dayChg.toFixed(2)}%</div>`;
-    tip.classList.add('show');
-    const {g, W, H} = setupCanvas(hist.el.canvas); hist.el._W=W; hist.el._H=H;
-    drawHistFrame(d, 1, {cross:{idx}});
-    paintCross(g, d, {cross:{idx}});
-    // 同步 overlay 十字
-    const x = hist.el.tipX(idx);
-    const histChart = document.getElementById('histChart');
-    const crossV = document.getElementById('crossV');
-    const crossH = document.getElementById('crossH');
-    if (crossV && crossH) {
-      crossV.style.left = x + 'px';
-      const yAt = (v)=> priceY(v, histAnchors(d,W,H).mn, histAnchors(d,W,H).mx, W, H);
-      crossH.style.top = yAt(b.c) + 'px';
-      histChart.classList.add('cross-on');
-    }
+    if(idx>=0) showCrossTip(idx);
   }
 });
 function historyCssCoord(){
@@ -1403,9 +1553,22 @@ function historyCssCoord(){
   hist.el.selBadge.className = 'sel-badge '+(upSel?'up':'down');
 }
 hist.el.canvas.addEventListener('pointerup', ()=>{
+  if(isMobileView()){
+    const p = hist.pan;
+    if(p){
+      if(!p.moved && p.tapIdx >= 0){
+        if(hist.cross && hist.cross.idx === p.tapIdx) hideCross();
+        else showCrossTip(p.tapIdx);
+      } else if(p.panning){
+        hist.el.selWrap.style.display='none';
+      }
+      hist.pan = null;
+    }
+    return;
+  }
   if(!hist.drag) return;
   if(hist.drag.started){
-    historyCssCoord();   // 保留选区
+    historyCssCoord();
     drawHist(hist.data, {sel: {i0: Math.min(hist.drag.i0,hist.drag.i1), i1: Math.max(hist.drag.i0,hist.drag.i1)}});
     hist.el.hint.style.display='none';
   } else {
@@ -1414,12 +1577,20 @@ hist.el.canvas.addEventListener('pointerup', ()=>{
   }
   hist.drag = null;
 });
+// 桌面移出画布清十字; 手机由轻点切换, leave 不处理
 hist.el.canvas.addEventListener('pointerleave', ()=>{
+  if(isMobileView()) return;
   if(hist.drag){ hist.drag=null; hist.el.selWrap.style.display='none'; drawHist(hist.data); hist.el.hint.style.display='block'; }
-  hist.cross = null;
-  hist.el.tip.classList.remove('show'); hist.el.tip.style.display='none';
-  document.getElementById('histChart').classList.remove('cross-on');
-  if(hist.data && hist.data.ok && !hist.drag) drawHist(hist.data);
+  hideCross();
+});
+// 双击: 手机回到最新窗口, 桌面清选区
+hist.el.canvas.addEventListener('dblclick', ()=>{
+  if(!hist.data?.ok) return;
+  hist.el.selWrap.style.display='none';
+  if(isMobileView()) initMobileWin(hist.data);
+  else { hist.winStart=null; hist.winCount=null; }
+  hideCross();
+  hist.el.hint.style.display='block';
 });
 // 范围切换
 hist.el.ranges.addEventListener('click', (e)=>{
@@ -1436,8 +1607,7 @@ hist.el.chartModes.addEventListener('click', (e)=>{
 hist.el.close.addEventListener('click', closeHist);
 hist.el.mask.addEventListener('click', closeHist);
 hist.el.canvas.addEventListener('pointercancel', ()=>{
-  hist.drag = null; hist.cross = null; hist.el.tip.style.display = 'none';
-  if(hist.data?.ok) drawHist(hist.data);
+  hist.drag = null; hist.pan = null; hideCross();
 });
 
 function drawHistAnimated(d){

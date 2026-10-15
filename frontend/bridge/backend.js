@@ -28,26 +28,50 @@
     return new TextDecoder(e);
   }
 
+  // base64 → Uint8Array (处理 0x80+ 字节, 不能用 charCodeAt 直接拼)
+  function base64ToBytes(b64) {
+    const bin = atob(b64);
+    const len = bin.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+
   async function httpGet(url, opts = {}) {
+    const first = await _httpGetOnce(url, opts);
+    if (first) return first;
+    // 网络抖动 / 临时 socket reset: 间隔 350ms 自动重试一次
+    if (opts.retry === false) return '';
+    await new Promise(r => setTimeout(r, 350));
+    return _httpGetOnce(url, Object.assign({}, opts, { retry: false, timeout: Math.max(opts.timeout || 5, 7) }));
+  }
+
+  async function _httpGetOnce(url, opts = {}) {
     const { headers = {}, enc = 'utf-8', timeout = 5 } = opts;
     const hdrs = Object.assign({ 'User-Agent': UA }, headers);
 
     // Capacitor 原生 HTTP (Android/iOS) — 零 CORS 限制
-    // 用官方内置的 CapacitorHttp (Capacitor 5+ 自带, 无需 @capacitor-community/http 插件)
+    // 关键: 一律拿 arraybuffer (base64) 回 JS 层, 用 TextDecoder 按指定编码解码
+    // 否则 OkHttp 默认 UTF-8 解腾讯/新浪的 GBK 响应 → 中文全乱码
     if (globalThis.CapacitorHttp && typeof globalThis.CapacitorHttp.get === 'function') {
       try {
-        // responseType: 'text' 直接返回字符串
         const { data } = await globalThis.CapacitorHttp.get({
-          url, headers: hdrs, responseType: 'text'
+          url, headers: hdrs, responseType: 'arraybuffer'
         });
-        return typeof data === 'string' ? data : '';
+        // 东财等 application/json 响应, 原生层已自动 parse 成对象
+        if (data && typeof data === 'object') return JSON.stringify(data);
+        if (typeof data === 'string' && data.length) {
+          return decoderFor(enc).decode(base64ToBytes(data));
+        }
+        return '';
       } catch(e) { /* fallthrough */ }
     }
     // 兼容旧版 community/http 插件
     if (globalThis.Capacitor && globalThis.Capacitor.Plugins && globalThis.Capacitor.Plugins.Http) {
       try {
-        const { value } = await globalThis.Capacitor.Plugins.Http.get({ url, headers: hdrs });
-        return typeof value === 'string' ? value : '';
+        const { value } = await globalThis.Capacitor.Plugins.Http.get({ url, headers: hdrs, responseType: 'arraybuffer' });
+        if (value && typeof value === 'string') return decoderFor(enc).decode(base64ToBytes(value));
+        return '';
       } catch(e) { /* fallthrough */ }
     }
 
@@ -70,8 +94,9 @@
       { headers: { Referer: 'https://finance.sina.com.cn', 'User-Agent': UA }, enc: 'gbk' });
   }
 
+  // 腾讯 qt.gtimg.cn 返回 GBK 编码 (中文股票/期货名), 必须按 gbk 解码
   function txGet(qs) {
-    return httpGet(`https://qt.gtimg.cn/q=${qs}`, { headers: { 'User-Agent': UA } });
+    return httpGet(`https://qt.gtimg.cn/q=${qs}`, { headers: { 'User-Agent': UA }, enc: 'gbk' });
   }
 
   // -------------------- Constants --------------------
@@ -310,6 +335,9 @@
       const change = (typeof f[31] !== 'undefined') ? parseFloat(f[31]) : Math.round((price - prev) * 100) / 100;
       const changePct = (typeof f[32] !== 'undefined') ? parseFloat(f[32])
                        : (prev ? Math.round((price - prev) / prev * 10000) / 100 : 0);
+      // A股时间是紧凑格式 20261015120556 → 2026-10-15 12:05 (美股 f[30] 本身是标准日期, 不匹配正则)
+      let tm = (typeof f[30] !== 'undefined' && f[30]) ? String(f[30]) : '';
+      if (/^\d{14}$/.test(tm)) tm = `${tm.slice(0,4)}-${tm.slice(4,6)}-${tm.slice(6,8)} ${tm.slice(8,10)}:${tm.slice(10,12)}`;
       return {
         name: f[1], price, prevClose: prev,
         open: f[5] ? parseFloat(f[5]) : null,
@@ -317,7 +345,7 @@
         low:  (typeof f[34] !== 'undefined' && f[34]) ? parseFloat(f[34]) : null,
         volume: (typeof f[6] !== 'undefined') ? parseFloat(f[6]) : 0,
         change, changePct,
-        time: (typeof f[30] !== 'undefined') ? f[30] : '',
+        time: tm,
       };
     } catch(e) { return null; }
   }

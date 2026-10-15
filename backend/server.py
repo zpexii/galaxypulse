@@ -865,10 +865,15 @@ def fetch_kline(symbol, sec, n=30):
         return 'candles', bars
     if sec == 'funds':
         return 'line', _fund_navline(symbol, n)
-    if sec == 'index':
+    if sec in ('index', 'indexes'):
+        # 指数: 必须 plain kline (复权接口仅返回 1 根); 兼容前端 'indexes' 历史命名
         return 'candles', _tx_day_kline('us.' + symbol, n, fq=False)
     if sec == 'futures':
-        return 'candles', _sina_future_kline(symbol, n)
+        # 腾讯期货日 K 优先 (hf_GC 等), 空则回退新浪
+        bars = _tx_day_kline('hf_' + symbol, n, fq=False)
+        if not bars:
+            bars = _sina_future_kline(symbol, n)
+        return 'candles', bars
     if sec == 'bonds':
         # 美债收益率: 东财日K (171.US10Y/US30Y)。
         # 只按需要根数取 —— 东财限流下响应会随数据量线性变慢, 取满反而拖垮 /api/live

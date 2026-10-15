@@ -1,5 +1,13 @@
 {
   "appId": "com.fengyue.galaxypulse",
   "appName": "GalaxyPulse",
-  "webDir": "frontend"
+  "webDir": "frontend",
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  },
+  "android": {
+    "allowMixedContent": true
+  }
 }

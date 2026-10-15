@@ -47,11 +47,15 @@
       if (path === '/api/live') {
         result = await S.getLive();
         const d = result || {};
-        const shouldFallback = (!!d.etfs && !d.etfs.length)
-                            && (!!d.ashares && !d.ashares.length)
-                            && (!!d.funds && !d.funds.length)
-                            && (d.unresolved || []).filter(u => u.sec === 'etfs').length > 3;
-        if (shouldFallback) return _origFetch(url, init);
+        // CORS 环境 (桌面浏览器预览) 下 bridge 大面积取空 → fallback Python server
+        // 真机 Capacitor 原生 OkHttp 不受 CORS 限制, 不会触发
+        const wanted = ['etfs','ashares','funds','macro'];
+        const got = wanted.reduce((n, k) => n + ((d[k] && d[k].length) ? 1 : 0), 0);
+        const unresolvedN = (d.unresolved || []).length;
+        const totalCards = (d.etfs?.length||0) + (d.ashares?.length||0) + (d.funds?.length||0)
+                         + (d.macro?.length||0) + (d.kpis?.length||0) + unresolvedN;
+        const failRatio = totalCards ? unresolvedN / totalCards : 1;
+        if (got < 3 || failRatio > 0.4) return _origFetch(url, init);
         return jsonResponse(result);
       }
 
