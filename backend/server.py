@@ -1374,8 +1374,9 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, body, ctype, cache='no-cache',
                    extra={'Last-Modified': formatdate(mtime, usegmt=True)})
 
-    def log_message(self, *a):
-        return
+    def log_message(self, format, *a):
+        if getattr(self, '_debug', False):
+            sys.stderr.write("[%s] %s - %s\n" % (self.log_date_time_string(), self.address_string(), format % a))
 
 def main():
     print(f"\n  GalaxyPulse 服务已启动")

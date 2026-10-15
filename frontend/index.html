@@ -366,6 +366,13 @@
     </div>
   </template>
 
-  <script src="app.js?v=16"></script>
+  <!-- Bridge: 本地 JS 后端 + fetch 拦截 (Capacitor / PWA 模式) -->
+  <script src="bridge/storage.js?v=17"></script>
+  <script src="bridge/backend.js?v=17"></script>
+  <script src="bridge/service.js?v=17"></script>
+  <script src="bridge/api.js?v=17"></script>
+  <!-- 移动端样式: 仅当窗口宽度 ≤ 768px 时生效 -->
+  <link rel="stylesheet" href="styles.mobile.css?v=17" media="(max-width: 768px)">
+  <script src="app.js?v=17"></script>
 </body>
 </html>

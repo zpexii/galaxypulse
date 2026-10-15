@@ -4,3 +4,21 @@ __pycache__/
 
 # 自选配置为运行时数据, 不随源码提交
 data/watchlist.json
+
+# Node / Capacitor
+node_modules/
+package-lock.json   # 不锁版本 (CI/本地 fresh npm install 会生成新的)
+# package.json       ← 不忽略! 记录 Capacitor + 插件依赖
+
+# Android (Capacitor 生成) — gradle 构建产物
+android/app/build/
+android/.gradle/
+android/local.properties
+android/**/*.iml
+android/**/build.gradle.bak
+
+# iOS
+ios/App/public/
+ios/App/Podfile
+ios/App/Podfile.lock
+ios/App/Pods/

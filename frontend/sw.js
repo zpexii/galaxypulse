@@ -1,8 +1,9 @@
-// GalaxyPulse Service Worker —— v14: 品牌字标更名 Fengyue + Nasdaq Assistant
-// 策略: HTML 走网络优先(入口必须最新) / 静态资源 stale-while-revalidate(先回缓存秒开, 后台静默更新) / API 仅网络
-const CACHE = 'galaxypulse-v14';
-const APP_SHELL = ['./', './index.html', './styles.css?v=14', './app.js?v=14',
+// GalaxyPulse Service Worker —— v17: klines fallback + 最终稳定版
+const CACHE = 'galaxypulse-v17';
+const APP_SHELL = ['./', './index.html', './styles.css?v=17', './styles.mobile.css?v=17', './app.js?v=17',
                    './manifest.json',
+                   './bridge/storage.js?v=17', './bridge/backend.js?v=17',
+                   './bridge/service.js?v=17', './bridge/api.js?v=17',
                    './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -25,13 +26,25 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url);
   if (url.origin !== location.origin) return;           // 跨域不接管
 
-  // API: 仅网络; 失败返回明确 JSON (旧版这里返回 undefined 会导致页面报网络错误)
+  // API: 仅网络; 失败返回明确 JSON
   if (url.pathname.startsWith('/api/')) {
     e.respondWith(
       fetch(req).catch(() =>
         new Response(JSON.stringify({ error: 'offline' }),
           { status: 503, headers: { 'Content-Type': 'application/json' } })
       )
+    );
+    return;
+  }
+
+  // bridge/*.js (JS 后端): 网络优先, 紧跟代码迭代
+  if (url.pathname.startsWith('/bridge/')) {
+    e.respondWith(
+      fetch(req).then((r) => {
+        const copy = r.clone();
+        caches.open(CACHE).then((c) => c.put(req, copy));
+        return r;
+      }).catch(() => caches.match(req))
     );
     return;
   }
